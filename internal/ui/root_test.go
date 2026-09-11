@@ -146,3 +146,61 @@ func TestRootQuitsOnQFromTheMenu(t *testing.T) {
 		t.Errorf("q produced %T, want a quit", cmd())
 	}
 }
+
+// openPrompt is a key that leaves the work item view taking typed input: the
+// fuzzy filter, and the branch name editor.
+var openPrompt = map[string]tea.KeyMsg{
+	"the fuzzy filter":  runes("/"),
+	"the branch prompt": runes("b"),
+}
+
+func TestRootCtrlCQuitsEvenWithAPromptOpen(t *testing.T) {
+	// bubbletea does not quit on ctrl+c by itself — the model has to. Yielding
+	// every key to a view that is taking typed input left the universal
+	// terminal interrupt doing nothing at all: the branch prompt is a bare
+	// textinput and does not bind it. (The fuzzy filter survived on an
+	// accident: bubbles/list binds ctrl+c as ForceQuit itself. It is covered
+	// here anyway, so the guarantee does not rest on that.)
+	for name, open := range openPrompt {
+		r := newRoot(t, "items")
+
+		updated, _ := r.Update(open)
+		r = updated.(*Root)
+		top, _ := r.top()
+		if !typing(top) {
+			t.Fatalf("%s did not open", name)
+		}
+
+		_, cmd := r.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+		if cmd == nil {
+			t.Fatalf("ctrl+c with %s open produced no command", name)
+		}
+		if _, ok := cmd().(tea.QuitMsg); !ok {
+			t.Errorf("ctrl+c with %s open produced %T, want a quit", name, cmd())
+		}
+	}
+}
+
+func TestRootLeavesEscAndQToAnOpenPrompt(t *testing.T) {
+	// esc closes the prompt and q is a letter to type into it; neither may be
+	// read as navigation while the view is taking typed input.
+	for name, open := range openPrompt {
+		for _, key := range []tea.KeyMsg{{Type: tea.KeyEsc}, runes("q")} {
+			r := newRoot(t, "items")
+			updated, _ := r.Update(open)
+			r = updated.(*Root)
+
+			updated, cmd := r.Update(key)
+			r = updated.(*Root)
+
+			if cmd != nil {
+				if _, quit := cmd().(tea.QuitMsg); quit {
+					t.Errorf("%v quit the program with %s open", key, name)
+				}
+			}
+			if !strings.Contains(r.View(), "^t mine/all") {
+				t.Errorf("%v popped the view instead of going to %s:\n%s", key, name, r.View())
+			}
+		}
+	}
+}

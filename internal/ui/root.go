@@ -162,7 +162,16 @@ func (r *Root) key(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return nil, false
 	}
 
-	// A view that is taking typed input owns every key, including esc and q.
+	// ctrl+c is above the typing guard on purpose. bubbletea does not quit on
+	// it by itself — the model has to — and the branch prompt is a bare
+	// textinput that does not bind it, so yielding it to the view left the
+	// universal terminal interrupt doing nothing at all.
+	if msg.String() == "ctrl+c" {
+		return tea.Quit, true
+	}
+
+	// Otherwise a view that is taking typed input owns every key, including
+	// esc and q.
 	if typing(top) {
 		return nil, false
 	}
@@ -171,8 +180,6 @@ func (r *Root) key(msg tea.KeyMsg) (tea.Cmd, bool) {
 	case "esc":
 		r.stack = r.stack[:len(r.stack)-1]
 		return nil, true
-	case "ctrl+c":
-		return tea.Quit, true
 	case "q":
 		// A drill-down treats q as "go back"; from a top-level view it quits.
 		if len(r.stack) > 1 {
