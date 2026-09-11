@@ -35,6 +35,10 @@ func (r workItemRow) CopyID() string { return fmt.Sprint(r.ID) }
 func (r workItemRow) Label() string  { return fmt.Sprintf("#%d %s", r.ID, r.Title) }
 func (r workItemRow) URL() string    { return r.url }
 
+// workItemsMsg carries the project's work items, fetched when the view is
+// entered rather than before the program starts.
+type workItemsMsg struct{ Items []azdo.WorkItem }
+
 // commentsMsg carries a fetched discussion. It names the work item it belongs
 // to because a slow fetch can land after the cursor has moved on.
 type commentsMsg struct {
@@ -59,6 +63,14 @@ type WorkItems struct {
 	mine     []Row
 	mineOnly bool
 
+	// includeClosed is the -all scope, kept so a refresh — and the fetch on
+	// entry — asks for the same set the view was opened with.
+	includeClosed bool
+
+	// loaded is false until a batch has landed, whether handed to the
+	// constructor or fetched on entry, so the body can say which it is.
+	loaded bool
+
 	// comments is keyed by work item id and filled lazily as the cursor moves.
 	comments map[int][]azdo.Comment
 	loading  map[int]bool
@@ -74,34 +86,65 @@ type WorkItems struct {
 	branchPrompt *textinput.Model
 }
 
-// NewWorkItems builds the work item browser from a fetched batch, splitting
-// out the caller's own items up front so toggling scope is instant.
-func NewWorkItems(c *azdo.Client, items []azdo.WorkItem, mineOnly bool) *WorkItems {
+// NewWorkItems builds the work item browser. items may be empty, which means
+// "fetch on entry" — the ordinary path now that the program no longer fetches
+// before the TUI starts. -dump still fetches synchronously and hands the batch
+// over here, and so do the tests. includeClosed mirrors the -all flag, so a
+// fetch this view runs itself asks for the same scope.
+func NewWorkItems(c *azdo.Client, items []azdo.WorkItem, mineOnly, includeClosed bool) *WorkItems {
 	m := &WorkItems{
 		client:        c,
 		browser:       NewBrowser(),
 		mineOnly:      mineOnly,
+		includeClosed: includeClosed,
 		comments:      map[int][]azdo.Comment{},
 		loading:       map[int]bool{},
 		discussionErr: map[int]bool{},
 		now:           time.Now,
 	}
 
-	for _, wi := range items {
-		row := workItemRow{wi, c.WorkItemURL(wi.ID)}
-		m.all = append(m.all, row)
-		if c.Me != "" && wi.AssignedKey == c.Me {
-			m.mine = append(m.mine, row)
-		}
-	}
-
 	m.browser.Detail = m.renderDetail
-	m.applyScope()
+	m.setItems(items)
+	m.loaded = len(items) > 0
 	return m
 }
 
-// Init asks for the first selected item's discussion.
-func (m *WorkItems) Init() tea.Cmd { return m.fetchComments() }
+// setItems splits the caller's own items out of the batch up front, so
+// toggling scope is instant.
+func (m *WorkItems) setItems(items []azdo.WorkItem) {
+	m.all, m.mine = nil, nil
+	for _, wi := range items {
+		row := workItemRow{wi, m.client.WorkItemURL(wi.ID)}
+		m.all = append(m.all, row)
+		if m.client.Me != "" && wi.AssignedKey == m.client.Me {
+			m.mine = append(m.mine, row)
+		}
+	}
+	m.applyScope()
+}
+
+// Init fetches the project's work items when the view has none, and otherwise
+// asks for the selected item's discussion. Root calls it when the view is
+// pushed, so the menu paints without waiting on the network and a failed fetch
+// lands on the status line instead of exiting the program.
+func (m *WorkItems) Init() tea.Cmd {
+	if !m.loaded {
+		return m.fetchItems()
+	}
+	return m.fetchComments()
+}
+
+// fetchItems reads the project's work items off the UI goroutine.
+func (m *WorkItems) fetchItems() tea.Cmd {
+	client, includeClosed := m.client, m.includeClosed
+	return func() tea.Msg {
+		items, err := client.WorkItems(includeClosed)
+		if err != nil {
+			return ErrMsg{Err: fmt.Errorf("could not fetch work items: %w", err)}
+		}
+		return workItemsMsg{Items: items}
+	}
+}
 
 func (m *WorkItems) applyScope() {
 	rows := m.all
@@ -148,6 +191,12 @@ func (m *WorkItems) fetchComments() tea.Cmd {
 // Update handles input and fetch results. It satisfies View.
 func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
+	case workItemsMsg:
+		m.setItems(msg.Items)
+		m.loaded = true
+		m.status, m.failed = "", false
+		return m, m.fetchComments()
+
 	case commentsMsg:
 		delete(m.loading, msg.ID)
 		delete(m.discussionErr, msg.ID)
@@ -256,6 +305,10 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 			}
 			return m, nil
 
+		case "r":
+			m.status, m.failed = "refreshing…", false
+			return m, m.fetchItems()
+
 		case "b":
 			it, ok := m.selected()
 			if !ok {
@@ -342,11 +395,17 @@ func (m *WorkItems) setRowState(id int, state string) {
 // Body renders the browser at the size Root has left for it.
 func (m *WorkItems) Body(width, height int) string {
 	m.browser.SetSize(width, height)
+	if !m.loaded {
+		return placeholder("work items", m.status, m.failed)
+	}
 	return m.browser.View()
 }
 
 // Title reports the current scope and the project the items belong to.
 func (m *WorkItems) Title() string {
+	if !m.loaded {
+		return fmt.Sprintf("work items (fetching) · %s/%s", m.client.Org, m.client.Project)
+	}
 	scope := fmt.Sprintf("all %d", len(m.all))
 	if m.mineOnly {
 		scope = fmt.Sprintf("mine %d", len(m.mine))
@@ -356,7 +415,7 @@ func (m *WorkItems) Title() string {
 
 // Hints is the key line at the bottom.
 func (m *WorkItems) Hints() string {
-	return "^t mine/all · a active · b branch · " + SharedHints + " · esc back"
+	return "^t mine/all · a active · b branch · r refresh · " + SharedHints + " · esc back"
 }
 
 // Status is the transient status line, or a prompt while one is open: the

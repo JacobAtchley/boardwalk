@@ -29,9 +29,12 @@ var menuEntries = []menuEntry{
 // Root owns the menu, the view stack, and every piece of chrome. Views render
 // only their own body.
 type Root struct {
-	client   *azdo.Client
-	items    []azdo.WorkItem
-	mineOnly bool
+	client *azdo.Client
+
+	// mineOnly and includeClosed are the -mine and -all flags, carried so the
+	// work item view fetches the scope boardwalk was launched with.
+	mineOnly      bool
+	includeClosed bool
 
 	stack  []View
 	choice int
@@ -44,9 +47,11 @@ type Root struct {
 
 // NewRoot builds the root model. When start names a menu entry, that view is
 // pushed immediately so boardwalk can be launched straight into it; otherwise
-// the menu is the first thing shown.
-func NewRoot(c *azdo.Client, items []azdo.WorkItem, mineOnly bool, start string) *Root {
-	r := &Root{client: c, items: items, mineOnly: mineOnly}
+// the menu is the first thing shown. No data comes in here: every view fetches
+// on entry, so the menu paints before anything touches the network — and a
+// view reached from the menu loads its own data however boardwalk was started.
+func NewRoot(c *azdo.Client, mineOnly, includeClosed bool, start string) *Root {
+	r := &Root{client: c, mineOnly: mineOnly, includeClosed: includeClosed}
 	if start != "" {
 		if v := r.build(start); v != nil {
 			r.stack = append(r.stack, v)
@@ -72,7 +77,7 @@ func (r *Root) ShellCommand() string { return r.command }
 func (r *Root) build(name string) View {
 	switch name {
 	case "items":
-		return NewWorkItems(r.client, r.items, r.mineOnly)
+		return NewWorkItems(r.client, nil, r.mineOnly, r.includeClosed)
 	case "prs":
 		return NewPullRequests(r.client)
 	case "builds":

@@ -54,7 +54,7 @@ func runes(s string) tea.KeyMsg {
 
 func TestViewRendersListAndDetailSideBySide(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false))
+	m := sized(t, NewWorkItems(c, items, false, false))
 	out := body(t, m)
 	t.Logf("\n%s", out)
 
@@ -82,7 +82,7 @@ func TestViewRendersListAndDetailSideBySide(t *testing.T) {
 
 func TestToggleSwitchesScope(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false))
+	m := sized(t, NewWorkItems(c, items, false, false))
 	if !strings.Contains(m.Title(), "all 3") {
 		t.Fatalf("title = %q, want all 3", m.Title())
 	}
@@ -101,7 +101,7 @@ func TestToggleSwitchesScope(t *testing.T) {
 func TestMineScopeStartsEmptyWhenIdentityUnknown(t *testing.T) {
 	_, items := fixture()
 	c := &azdo.Client{Org: "acme", Project: "Platform"} // az account show failed
-	m := sized(t, NewWorkItems(c, items, true))
+	m := sized(t, NewWorkItems(c, items, true, false))
 
 	if !strings.Contains(m.Title(), "mine 0") {
 		t.Errorf("title = %q, want mine 0 — an empty identity must not match every item", m.Title())
@@ -110,7 +110,7 @@ func TestMineScopeStartsEmptyWhenIdentityUnknown(t *testing.T) {
 
 func TestActionKeysAreInertWhileFiltering(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false))
+	m := sized(t, NewWorkItems(c, items, false, false))
 
 	m, _ = press(t, m, runes("/"))
 	m, _ = press(t, m, runes("o"))
@@ -148,7 +148,7 @@ func TestWordwrapBreaksOnWords(t *testing.T) {
 
 func TestWorkItemsShowsAcceptanceCriteria(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false))
+	m := sized(t, NewWorkItems(c, items, false, false))
 
 	if !strings.Contains(body(t, m), "Retries three times") {
 		t.Errorf("the detail pane is missing the acceptance criteria:\n%s", body(t, m))
@@ -162,7 +162,7 @@ func TestWorkItemsRequestsTheDiscussionForTheSelectedItem(t *testing.T) {
 	// pick up a newly-scrolled-to row's discussion). Calling it first would
 	// mark the fetch in flight before Init ever ran, defeating the point of
 	// this test. In production Init runs first, before any other message.
-	m := NewWorkItems(c, items, false)
+	m := NewWorkItems(c, items, false, false)
 
 	// The fetch is a command rather than a call, so the test can run it or not.
 	if cmd := m.Init(); cmd == nil {
@@ -172,7 +172,7 @@ func TestWorkItemsRequestsTheDiscussionForTheSelectedItem(t *testing.T) {
 
 func TestWorkItemsRendersAFetchedDiscussion(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false))
+	m := sized(t, NewWorkItems(c, items, false, false))
 
 	updated, _ := m.Update(commentsMsg{ID: 4021, Comments: []azdo.Comment{
 		{Author: "Other Dev", Created: time.Now().Add(-2 * time.Hour), Text: "Why the retry cap?"},
@@ -188,7 +188,7 @@ func TestWorkItemsRendersAFetchedDiscussion(t *testing.T) {
 func TestWorkItemsIgnoresADiscussionForAnotherItem(t *testing.T) {
 	// A slow fetch can land after the cursor has moved on.
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false))
+	m := sized(t, NewWorkItems(c, items, false, false))
 
 	updated, _ := m.Update(commentsMsg{ID: 3998, Comments: []azdo.Comment{
 		{Author: "Other Dev", Text: "stale comment"},
@@ -202,7 +202,7 @@ func TestWorkItemsIgnoresADiscussionForAnotherItem(t *testing.T) {
 
 func TestWorkItemsToggleSwitchesScope(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false))
+	m := sized(t, NewWorkItems(c, items, false, false))
 
 	if !strings.Contains(m.Title(), "all 3") {
 		t.Errorf("title = %q, want the full count", m.Title())
@@ -215,7 +215,7 @@ func TestWorkItemsToggleSwitchesScope(t *testing.T) {
 
 func TestWorkItemsErrorGoesToTheStatusLine(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false))
+	m := sized(t, NewWorkItems(c, items, false, false))
 
 	updated, _ := m.Update(ErrMsg{Err: errors.New("no network")})
 	m = updated.(*WorkItems)
@@ -232,7 +232,7 @@ func TestWorkItemsErrorGoesToTheStatusLine(t *testing.T) {
 
 func TestWorkItemsRecoversFromAFailedDiscussionFetch(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false))
+	m := sized(t, NewWorkItems(c, items, false, false))
 
 	updated, _ := m.Update(commentsErrMsg{ID: 4021, Err: errors.New("could not load the discussion for #4021: timeout")})
 	m = updated.(*WorkItems)
@@ -254,5 +254,53 @@ func TestWorkItemsRecoversFromAFailedDiscussionFetch(t *testing.T) {
 	// instead of being silently skipped forever.
 	if cmd := m.fetchComments(); cmd == nil {
 		t.Error("a failed discussion fetch should be retried on a later selection, not skipped forever")
+	}
+}
+
+func TestWorkItemsFetchesOnEntryWhenItHasNoItems(t *testing.T) {
+	// The spec's Loading section: views fetch on entry through a command, so
+	// the menu paints immediately and a failure reaches the status line rather
+	// than exiting the program before the TUI ever starts.
+	c, _ := fixture()
+	m := NewWorkItems(c, nil, false, false)
+
+	if cmd := m.Init(); cmd == nil {
+		t.Fatal("a view with no items did not fetch on entry")
+	}
+	if got := m.Body(testWidth, testHeight); !strings.Contains(got, "fetching work items") {
+		t.Errorf("expected the fetching placeholder before the items land, got:\n%s", got)
+	}
+	if strings.Contains(m.Title(), "all 0") {
+		t.Errorf("title = %q — a view that has not fetched yet must not claim the project is empty", m.Title())
+	}
+}
+
+func TestWorkItemsRendersItemsThatArriveFromItsOwnFetch(t *testing.T) {
+	c, items := fixture()
+	m := NewWorkItems(c, nil, false, false)
+
+	updated, _ := m.Update(workItemsMsg{Items: items})
+	m = updated.(*WorkItems)
+
+	if !strings.Contains(body(t, m), "Retry webhook delivery") {
+		t.Errorf("the fetched items did not reach the list:\n%s", body(t, m))
+	}
+	if !strings.Contains(m.Title(), "all 3") {
+		t.Errorf("title = %q, want the fetched count", m.Title())
+	}
+}
+
+func TestWorkItemsBuiltWithItemsDoesNotRefetchThem(t *testing.T) {
+	// -dump's path and the tests hand the view a batch that is already
+	// fetched; entering it must ask for the selected item's discussion, not
+	// for the project all over again.
+	c, items := fixture()
+	m := NewWorkItems(c, items, false, false)
+
+	if got := m.Body(testWidth, testHeight); strings.Contains(got, "fetching work items") {
+		t.Errorf("a view built with items showed the fetching placeholder:\n%s", got)
+	}
+	if cmd := m.Init(); cmd == nil {
+		t.Fatal("the view did not ask for the selected item's discussion")
 	}
 }

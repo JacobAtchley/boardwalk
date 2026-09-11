@@ -96,7 +96,7 @@ func parseCommandLine(args []string) (flags, error) {
 	fs.BoolVar(&f.mineOnly, "mine", false, "start filtered to items assigned to you")
 	fs.BoolVar(&f.all, "all", false, "include closed/done/resolved/removed")
 	fs.BoolVar(&f.dump, "dump", false, "print work item rows and exit, no TUI")
-	fs.BoolVar(&f.timing, "timing", false, "report fetch duration on stderr")
+	fs.BoolVar(&f.timing, "timing", false, "report the -dump fetch duration on stderr")
 	fs.BoolVar(&f.showVersion, "version", false, "print version and exit")
 	if err := fs.Parse(rest); err != nil {
 		return flags{}, err
@@ -123,22 +123,22 @@ func run(start string, mineOnly, all, dump, timing bool) error {
 		return err
 	}
 
-	// Work items are the one view whose data is fetched before the program
-	// starts: the whole project comes back in one pass, and -dump needs it
-	// without a TUI at all. The other views fetch on entry.
-	var items []azdo.WorkItem
-	if dump || start == "items" || start == "" {
+	// -dump is the one path that still fetches before anything renders: it
+	// prints rows and exits without a TUI, so there is no view to fetch on
+	// entry. Every view inside the TUI fetches itself, which is what lets the
+	// menu paint immediately and what keeps a failed fetch on the status line
+	// instead of exiting the program.
+	if dump {
 		fetchStart := time.Now()
-		if items, err = client.WorkItems(all); err != nil {
+		items, err := client.WorkItems(all)
+		if err != nil {
 			return fmt.Errorf("could not fetch work items: %w", err)
 		}
 		if timing {
 			fmt.Fprintf(os.Stderr, "fetched %d work items in %s\n",
 				len(items), time.Since(fetchStart).Round(time.Millisecond))
 		}
-	}
 
-	if dump {
 		if mineOnly {
 			items = azdo.MineOf(items, client.Me)
 		}
@@ -148,7 +148,7 @@ func run(start string, mineOnly, all, dump, timing bool) error {
 		return nil
 	}
 
-	root := ui.NewRoot(client, items, mineOnly, start)
+	root := ui.NewRoot(client, mineOnly, all, start)
 	final, err := tea.NewProgram(root, tea.WithAltScreen()).Run()
 	if err != nil {
 		return err

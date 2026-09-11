@@ -78,7 +78,7 @@ func assertDetailScrollSticks[M View](t *testing.T, r *runtimeView[M], marker st
 
 func TestWorkItemsDetailScrollSurvivesARepaint(t *testing.T) {
 	c, items := fixture()
-	r := drive[*WorkItems](t, NewWorkItems(c, items, false), 120, 8)
+	r := drive[*WorkItems](t, NewWorkItems(c, items, false, false), 120, 8)
 
 	assertDetailScrollSticks(t, r, "#4021")
 }

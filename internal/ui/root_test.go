@@ -15,8 +15,22 @@ func buildStub() azdo.Build {
 func newRoot(t *testing.T, start string) *Root {
 	t.Helper()
 	c, items := fixture()
-	r := NewRoot(c, items, false, start)
+	r := NewRoot(c, false, false, start)
 	updated, _ := r.Update(tea.WindowSizeMsg{Width: 140, Height: 30})
+	r = updated.(*Root)
+	// The work item view fetches on entry like every other view, so the batch
+	// its command would have returned is delivered here instead. Nothing in
+	// these tests talks to the network.
+	if start == "items" {
+		r = loadItems(t, r, items)
+	}
+	return r
+}
+
+// loadItems delivers the work item batch a view's fetch would have produced.
+func loadItems(t *testing.T, r *Root, items []azdo.WorkItem) *Root {
+	t.Helper()
+	updated, _ := r.Update(workItemsMsg{Items: items})
 	return updated.(*Root)
 }
 
@@ -38,7 +52,7 @@ func TestRootMenuOpensTheChosenView(t *testing.T) {
 	r := newRoot(t, "")
 
 	updated, _ := r.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	r = updated.(*Root)
+	r = loadItems(t, updated.(*Root), mustItems(t))
 
 	if !strings.Contains(r.View(), "work items (all 3)") {
 		t.Errorf("enter on the first entry did not open work items:\n%s", r.View())
@@ -203,4 +217,38 @@ func TestRootLeavesEscAndQToAnOpenPrompt(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestRootOpensWorkItemsFromTheMenuAfterStartingElsewhere(t *testing.T) {
+	// boardwalk prs left the work item batch nil, and the menu handed that nil
+	// slice to the view: the user was told their project had no work items, with
+	// no error and no way to load them.
+	c, _ := fixture()
+	r := NewRoot(c, false, false, "prs")
+	updated, _ := r.Update(tea.WindowSizeMsg{Width: 140, Height: 30})
+	r = updated.(*Root)
+
+	updated, _ = r.Update(tea.KeyMsg{Type: tea.KeyEsc}) // back to the menu
+	r = updated.(*Root)
+	updated, cmd := r.Update(tea.KeyMsg{Type: tea.KeyEnter}) // work items
+	r = updated.(*Root)
+
+	if cmd == nil {
+		t.Fatal("opening work items from the menu did not fetch them")
+	}
+	view := r.View()
+	if strings.Contains(view, "all 0") {
+		t.Errorf("the view claimed the project has no work items:\n%s", view)
+	}
+	if !strings.Contains(view, "fetching work items") {
+		t.Errorf("expected the fetching placeholder while the fetch is in flight:\n%s", view)
+	}
+}
+
+// mustItems is the fixture's batch, for a test that opens work items partway
+// through rather than through newRoot.
+func mustItems(t *testing.T) []azdo.WorkItem {
+	t.Helper()
+	_, items := fixture()
+	return items
 }

@@ -55,6 +55,17 @@ func truncate(s string, width int) string {
 	return ansi.Truncate(s, width, "…")
 }
 
+// placeholder is what a list view's body reads before its first batch lands. A
+// fetch that has already failed says so here: leaving the body on "fetching…"
+// while the status line under it reports the failure puts two contradictory
+// statements on one screen, with nothing to say which is current.
+func placeholder(what, status string, failed bool) string {
+	if failed && status != "" {
+		return errStyle.Render(status) + "\n" + chromeStyle.Render("press r to try again")
+	}
+	return chromeStyle.Render("fetching " + what + "…")
+}
+
 // wordwrap breaks text on word boundaries at the given width.
 func wordwrap(s string, width int) string {
 	var out strings.Builder
