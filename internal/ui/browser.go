@@ -105,6 +105,12 @@ func (b *Browser) Selected() (Row, bool) {
 // Update forwards a message to the list and re-renders the detail pane when
 // the selected row has changed.
 //
+// ctrl+u and ctrl+d are claimed for the detail pane's own scrolling before
+// anything reaches the list, so a description, acceptance criteria and
+// discussion that together overflow the pane stay reachable. The list's own
+// paging keys are pgup/b and pgdown/f, so these two are free — see
+// bubbles/list's DefaultKeyMap.
+//
 // Comparing the row rather than the cursor position is deliberate: filtering
 // replaces the matched set asynchronously, via a list.FilterMatchesMsg that
 // arrives on a later tick, without moving the cursor. The row sitting at the
@@ -112,6 +118,17 @@ func (b *Browser) Selected() (Row, bool) {
 // index comparison alone would miss it, leaving the pane on stale data as the
 // query narrows.
 func (b *Browser) Update(msg tea.Msg) tea.Cmd {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "ctrl+u":
+			b.detail.HalfPageUp()
+			return nil
+		case "ctrl+d":
+			b.detail.HalfPageDown()
+			return nil
+		}
+	}
+
 	before, hadBefore := b.Selected()
 
 	var cmd tea.Cmd

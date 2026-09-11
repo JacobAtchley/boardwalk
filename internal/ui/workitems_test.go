@@ -226,3 +226,30 @@ func TestWorkItemsErrorGoesToTheStatusLine(t *testing.T) {
 		t.Error("the rows were lost when a fetch failed")
 	}
 }
+
+func TestWorkItemsRecoversFromAFailedDiscussionFetch(t *testing.T) {
+	c, items := fixture()
+	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+
+	updated, _ := m.Update(commentsErrMsg{ID: 4021, Err: errors.New("could not load the discussion for #4021: timeout")})
+	m = updated.(*WorkItems)
+
+	text, isErr := m.Status()
+	if !isErr || !strings.Contains(text, "timeout") {
+		t.Errorf("status = %q, isErr = %v; want the fetch error reported", text, isErr)
+	}
+	// The rows must survive the failure, same as any other fetch error.
+	if !strings.Contains(body(t, m), "Retry webhook delivery") {
+		t.Error("the rows were lost when the discussion fetch failed")
+	}
+	// A failed fetch is not the same as one still in flight — the pane must
+	// say so honestly rather than reading "loading…" forever.
+	if strings.Contains(body(t, m), "loading…") {
+		t.Error("the pane should not still say loading after the fetch failed")
+	}
+	// The in-flight guard must be cleared so a later selection retries
+	// instead of being silently skipped forever.
+	if cmd := m.fetchComments(); cmd == nil {
+		t.Error("a failed discussion fetch should be retried on a later selection, not skipped forever")
+	}
+}

@@ -152,6 +152,41 @@ func TestBrowserDetailFollowsAFilterThatMovesTheRowUnderTheCursor(t *testing.T) 
 	}
 }
 
+func TestBrowserDetailPaneScrollsIndependentlyOfTheList(t *testing.T) {
+	// A description, acceptance criteria and discussion together can easily
+	// overflow the pane; ctrl+u/ctrl+d must reach the viewport rather than
+	// leaving that overflow permanently unreachable.
+	var lines []string
+	for i := 0; i < 40; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	content := strings.Join(lines, "\n")
+
+	b := NewBrowser()
+	b.Detail = func(Row, int) string { return content }
+	b.SetRows([]Row{fakeRow{1, "first"}, fakeRow{2, "second"}})
+	b.SetSize(100, 10)
+
+	view := b.View()
+	if !strings.Contains(view, "line 0") {
+		t.Fatalf("expected the top of the content to be visible before scrolling:\n%s", view)
+	}
+	if strings.Contains(view, "line 30") {
+		t.Fatalf("line 30 should be below the fold before scrolling:\n%s", view)
+	}
+
+	before, _ := b.Selected()
+	b.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	after, ok := b.Selected()
+
+	if !ok || after.CopyID() != before.CopyID() {
+		t.Error("ctrl+d scrolled the detail pane but also moved the list selection")
+	}
+	if strings.Contains(b.View(), "line 0") {
+		t.Error("ctrl+d should have scrolled the detail pane down, but the top line is still visible")
+	}
+}
+
 func TestSharedActionHandlesTheThreeCommonKeys(t *testing.T) {
 	row := fakeRow{42, "a thing"}
 

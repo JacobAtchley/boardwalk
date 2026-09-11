@@ -41,6 +41,14 @@ type commentsMsg struct {
 	Comments []azdo.Comment
 }
 
+// commentsErrMsg is a discussion fetch that failed. It names its work item so
+// the in-flight guard can be cleared — without the id the item would stay
+// marked as loading forever and never be retried.
+type commentsErrMsg struct {
+	ID  int
+	Err error
+}
+
 // WorkItems is the work item browser.
 type WorkItems struct {
 	client  *azdo.Client
@@ -53,6 +61,9 @@ type WorkItems struct {
 	// comments is keyed by work item id and filled lazily as the cursor moves.
 	comments map[int][]azdo.Comment
 	loading  map[int]bool
+	// discussionErr marks an id whose discussion fetch failed, so the pane
+	// can say so honestly instead of reading "loading…" forever.
+	discussionErr map[int]bool
 
 	status string
 	failed bool
@@ -63,12 +74,13 @@ type WorkItems struct {
 // out the caller's own items up front so toggling scope is instant.
 func NewWorkItems(c *azdo.Client, items []azdo.WorkItem, mineOnly bool) *WorkItems {
 	m := &WorkItems{
-		client:   c,
-		browser:  NewBrowser(),
-		mineOnly: mineOnly,
-		comments: map[int][]azdo.Comment{},
-		loading:  map[int]bool{},
-		now:      time.Now,
+		client:        c,
+		browser:       NewBrowser(),
+		mineOnly:      mineOnly,
+		comments:      map[int][]azdo.Comment{},
+		loading:       map[int]bool{},
+		discussionErr: map[int]bool{},
+		now:           time.Now,
 	}
 
 	for _, wi := range items {
@@ -116,11 +128,14 @@ func (m *WorkItems) fetchComments() tea.Cmd {
 	}
 
 	m.loading[it.ID] = true
+	// A retry after a prior failure should show "loading…" again rather than
+	// the stale failure message while the new attempt is in flight.
+	delete(m.discussionErr, it.ID)
 	client, id := m.client, it.ID
 	return func() tea.Msg {
 		comments, err := client.Comments(id)
 		if err != nil {
-			return ErrMsg{Err: fmt.Errorf("could not load the discussion for #%d: %w", id, err)}
+			return commentsErrMsg{ID: id, Err: fmt.Errorf("could not load the discussion for #%d: %w", id, err)}
 		}
 		return commentsMsg{ID: id, Comments: comments}
 	}
@@ -131,7 +146,17 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case commentsMsg:
 		delete(m.loading, msg.ID)
+		delete(m.discussionErr, msg.ID)
 		m.comments[msg.ID] = msg.Comments
+		if it, ok := m.selected(); ok && it.ID == msg.ID {
+			m.browser.RefreshDetail()
+		}
+		return m, nil
+
+	case commentsErrMsg:
+		delete(m.loading, msg.ID)
+		m.discussionErr[msg.ID] = true
+		m.status, m.failed = msg.Err.Error(), true
 		if it, ok := m.selected(); ok && it.ID == msg.ID {
 			m.browser.RefreshDetail()
 		}
@@ -182,9 +207,9 @@ func (m *WorkItems) renderDetail(row Row, width int) string {
 	for _, field := range [][2]string{
 		{"type", it.Type},
 		{"state", it.State},
-		{"assigned", it.Assigned},
-		{"tags", orDash(strings.ReplaceAll(it.Tags, "; ", ", "))},
 		{"iteration", orDash(it.Iteration)},
+		{"tags", orDash(strings.ReplaceAll(it.Tags, "; ", ", "))},
+		{"assigned", it.Assigned},
 	} {
 		fmt.Fprintf(&b, "%s %s\n",
 			labelStyle.Render(fmt.Sprintf("%-10s", field[0]+":")),
@@ -196,6 +221,8 @@ func (m *WorkItems) renderDetail(row Row, width int) string {
 
 	fmt.Fprintf(&b, "\n%s\n", labelStyle.Render("discussion"))
 	switch comments, loaded := m.comments[it.ID]; {
+	case m.discussionErr[it.ID]:
+		fmt.Fprintf(&b, "%s\n", chromeStyle.Render("(could not load the discussion)"))
 	case !loaded:
 		fmt.Fprintf(&b, "%s\n", chromeStyle.Render("loading…"))
 	case len(comments) == 0:

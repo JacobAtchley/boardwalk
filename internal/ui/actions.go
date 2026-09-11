@@ -9,7 +9,7 @@ import (
 )
 
 // SharedHints is the part of the key line every view has in common.
-const SharedHints = "/ filter · y copy id · s slack · o open"
+const SharedHints = "/ filter · y copy id · s slack · o open · ^u/^d detail"
 
 // SharedAction runs the copy and open actions every view binds. It reports
 // whether it claimed the key, so a view can fall through to its own bindings.
