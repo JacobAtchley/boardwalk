@@ -15,6 +15,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -29,25 +30,27 @@ var version = "dev"
 // subcommands are the views boardwalk can open directly, skipping the menu.
 var subcommands = map[string]bool{"items": true, "prs": true, "builds": true}
 
+// flags is every command-line option boardwalk understands, plus the
+// starting view once -mine/-all have been folded in by startFor.
+type flags struct {
+	start                       string
+	mineOnly, all, dump, timing bool
+	showVersion                 bool
+}
+
 func main() {
-	start, rest := parseArgs(os.Args[1:])
+	f, err := parseCommandLine(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "✗ %v\n", err)
+		os.Exit(1)
+	}
 
-	fs := flag.NewFlagSet("boardwalk", flag.ExitOnError)
-	var (
-		mineOnly    = fs.Bool("mine", false, "start filtered to items assigned to you")
-		all         = fs.Bool("all", false, "include closed/done/resolved/removed")
-		dump        = fs.Bool("dump", false, "print work item rows and exit, no TUI")
-		timing      = fs.Bool("timing", false, "report fetch duration on stderr")
-		showVersion = fs.Bool("version", false, "print version and exit")
-	)
-	fs.Parse(rest)
-
-	if *showVersion {
+	if f.showVersion {
 		fmt.Println("boardwalk", version)
 		return
 	}
 
-	if err := run(startFor(start, *mineOnly, *all), *mineOnly, *all, *dump, *timing); err != nil {
+	if err := run(f.start, f.mineOnly, f.all, f.dump, f.timing); err != nil {
 		fmt.Fprintf(os.Stderr, "✗ %v\n", err)
 		os.Exit(1)
 	}
@@ -73,6 +76,40 @@ func startFor(start string, mineOnly, all bool) string {
 		return "items"
 	}
 	return ""
+}
+
+// parseCommandLine runs the whole argument pipeline — peel off a subcommand,
+// then parse flags — and reports a leftover positional argument as an error
+// instead of letting it vanish. The standard flag package stops at the first
+// non-flag word without complaint, so a subcommand typed after a flag (e.g.
+// "boardwalk -mine prs") or a misspelled subcommand (e.g. "boardwalk builter")
+// used to be silently discarded, leaving fs.Args() non-empty with nothing
+// reading it. It is split out of main so the pipeline can be exercised by a
+// test without invoking main or the built binary, and it makes no network
+// call — only flag parsing.
+func parseCommandLine(args []string) (flags, error) {
+	start, rest := parseArgs(args)
+
+	fs := flag.NewFlagSet("boardwalk", flag.ContinueOnError)
+	fs.SetOutput(io.Discard) // main reports the error itself
+	var f flags
+	fs.BoolVar(&f.mineOnly, "mine", false, "start filtered to items assigned to you")
+	fs.BoolVar(&f.all, "all", false, "include closed/done/resolved/removed")
+	fs.BoolVar(&f.dump, "dump", false, "print work item rows and exit, no TUI")
+	fs.BoolVar(&f.timing, "timing", false, "report fetch duration on stderr")
+	fs.BoolVar(&f.showVersion, "version", false, "print version and exit")
+	if err := fs.Parse(rest); err != nil {
+		return flags{}, err
+	}
+
+	if leftover := fs.Args(); len(leftover) > 0 {
+		return flags{}, fmt.Errorf(
+			"unexpected argument %q — subcommands come first, e.g. boardwalk %s\n  valid subcommands: items, prs, builds",
+			leftover[0], leftover[0])
+	}
+
+	f.start = startFor(start, f.mineOnly, f.all)
+	return f, nil
 }
 
 func run(start string, mineOnly, all, dump, timing bool) error {

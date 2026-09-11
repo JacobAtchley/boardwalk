@@ -42,3 +42,47 @@ func TestStartForFlags(t *testing.T) {
 		t.Errorf("startFor with no flags = %q, want the menu", got)
 	}
 }
+
+// A word that survives flag parsing unclaimed used to vanish silently — a
+// subcommand typed after a flag (the flag package stops at the first
+// non-flag word) or a misspelled subcommand both left fs.Args() non-empty
+// with nothing reading it. parseCommandLine must turn that into an error
+// instead of quietly opening the wrong view, or the menu, with no feedback.
+func TestParseCommandLineRejectsALeftoverArgument(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"a subcommand after a flag is discarded, not read", []string{"-mine", "prs"}},
+		{"the same for -all", []string{"-all", "builds"}},
+		{"a misspelled subcommand is left over too", []string{"builter"}},
+	} {
+		if _, err := parseCommandLine(tc.args); err == nil {
+			t.Errorf("%s: parseCommandLine(%v) = nil error, want one naming the leftover argument", tc.name, tc.args)
+		}
+	}
+}
+
+func TestParseCommandLineAcceptsTheDocumentedOrderings(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		start string
+	}{
+		{"a bare subcommand", []string{"prs"}, "prs"},
+		{"a subcommand followed by a flag", []string{"items", "-mine"}, "items"},
+		{"a flag alone implies items", []string{"-mine"}, "items"},
+		{"no arguments opens the menu", nil, ""},
+		{"-dump alone does not force a view", []string{"-dump"}, ""},
+		{"-version alone does not force a view", []string{"-version"}, ""},
+	} {
+		f, err := parseCommandLine(tc.args)
+		if err != nil {
+			t.Errorf("%s: parseCommandLine(%v) = error %v, want none", tc.name, tc.args, err)
+			continue
+		}
+		if f.start != tc.start {
+			t.Errorf("%s: start = %q, want %q", tc.name, f.start, tc.start)
+		}
+	}
+}

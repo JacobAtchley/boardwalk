@@ -63,8 +63,9 @@ boardwalk -timing      # report fetch duration on stderr
 | `y` | copy the id |
 | `s` | copy a Slack message — `[#4021 title](link)` |
 | `o` | open in the browser |
-| `esc` | back to the menu |
-| `q` | quit |
+| `^u` / `^d` | scroll the detail pane |
+| `esc` | back one level (or quit, from a top-level view) |
+| `q` | back one level (or quit, from a top-level view) |
 
 ### Work items
 
