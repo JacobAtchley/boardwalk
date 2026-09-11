@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -68,6 +69,9 @@ type WorkItems struct {
 	status string
 	failed bool
 	now    func() time.Time
+
+	// branchPrompt is non-nil while the branch name is being edited.
+	branchPrompt *textinput.Model
 }
 
 // NewWorkItems builds the work item browser from a fetched batch, splitting
@@ -170,7 +174,56 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.status, m.failed = msg.Text, msg.Err
 		return m, nil
 
+	case branchDoneMsg:
+		if msg.Err != nil {
+			m.failed = true
+			m.status = msg.Err.Error()
+			if len(msg.Steps) > 0 {
+				m.status = strings.Join(msg.Steps, ", ") + "; then " + msg.Err.Error()
+			}
+			return m, nil
+		}
+		m.status, m.failed = strings.Join(msg.Steps, " · "), false
+		// The shell has to do the checkout: a child process cannot move its
+		// parent's working tree.
+		return m, func() tea.Msg {
+			return ShellCommandMsg{Command: fmt.Sprintf("git fetch origin && git checkout %s", msg.Branch)}
+		}
+
+	case stateSetMsg:
+		if msg.Err != nil {
+			m.status, m.failed = msg.Err.Error(), true
+			return m, nil
+		}
+		m.setRowState(msg.ID, msg.State)
+		m.status, m.failed = fmt.Sprintf("#%d is now %s", msg.ID, msg.State), false
+		return m, nil
+
 	case tea.KeyMsg:
+		// The branch prompt owns every key while it is open, including esc
+		// and the letters that are otherwise actions — typing "o" into it
+		// must add the letter, not open a browser.
+		if m.branchPrompt != nil {
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.branchPrompt = nil
+				m.status, m.failed = "", false
+				return m, nil
+			case tea.KeyEnter:
+				branch := strings.TrimSpace(m.branchPrompt.Value())
+				m.branchPrompt = nil
+				it, ok := m.selected()
+				if !ok || branch == "" {
+					return m, nil
+				}
+				m.status, m.failed = "creating "+branch+"…", false
+				return m, branchCmd(m.client, it.ID, branch)
+			}
+			input, cmd := m.branchPrompt.Update(msg)
+			m.branchPrompt = &input
+			return m, cmd
+		}
+
 		// While the filter prompt is open every key belongs to it, or typing
 		// "o" would open a browser instead of entering a letter.
 		if m.browser.Filtering() {
@@ -189,6 +242,26 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 			m.mineOnly = !m.mineOnly
 			m.applyScope()
 			return m, m.fetchComments()
+
+		case "a":
+			if it, ok := m.selected(); ok {
+				m.status, m.failed = fmt.Sprintf("setting #%d Active…", it.ID), false
+				return m, stateCmd(m.client, it.ID, "Active")
+			}
+			return m, nil
+
+		case "b":
+			it, ok := m.selected()
+			if !ok {
+				return m, nil
+			}
+			input := textinput.New()
+			input.Prompt = "branch: "
+			input.SetValue(branchName(it.Type, it.ID, it.Title))
+			input.CursorEnd()
+			input.Focus()
+			m.branchPrompt = &input
+			return m, textinput.Blink
 		}
 	}
 
@@ -245,6 +318,21 @@ func section(b *strings.Builder, title, text, empty string, width int) {
 	fmt.Fprintf(b, "\n%s\n%s\n", labelStyle.Render(title), wordwrap(text, width))
 }
 
+// setRowState rewrites a row in place after a successful state change, so the
+// list agrees with the server without refetching the project.
+func (m *WorkItems) setRowState(id int, state string) {
+	for _, set := range [][]Row{m.all, m.mine} {
+		for i, row := range set {
+			if it, ok := row.(workItemRow); ok && it.ID == id {
+				it.State = state
+				set[i] = it
+			}
+		}
+	}
+	m.applyScope()
+	m.browser.RefreshDetail()
+}
+
 // Body renders the browser at the size Root has left for it.
 func (m *WorkItems) Body(width, height int) string {
 	m.browser.SetSize(width, height)
@@ -262,11 +350,16 @@ func (m *WorkItems) Title() string {
 
 // Hints is the key line at the bottom.
 func (m *WorkItems) Hints() string {
-	return "^t mine/all · " + SharedHints + " · esc back"
+	return "^t mine/all · a active · b branch · " + SharedHints + " · esc back"
 }
 
-// Status is the transient status line, or the filter prompt while it is open.
+// Status is the transient status line, or a prompt while one is open: the
+// branch prompt takes priority over the fuzzy filter since only one of the
+// two can be open at a time.
 func (m *WorkItems) Status() (string, bool) {
+	if m.branchPrompt != nil {
+		return m.branchPrompt.View(), false
+	}
 	if m.browser.Filtering() {
 		return m.browser.FilterView(), false
 	}
