@@ -30,6 +30,11 @@ func newPRs(t *testing.T) *PullRequests {
 	c, prs := prFixture()
 	m := NewPullRequests(c)
 	m.now = func() time.Time { return time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC) }
+	// NewPullRequests scopes to the working directory's repository when
+	// azdo.CurrentRepo() finds one, which depends on this checkout's git
+	// remote. Pinning it here keeps the tests' outcome independent of where
+	// boardwalk itself was cloned from.
+	m.repoOnly = false
 	updated, _ := m.Update(prsMsg{PRs: prs})
 	m = updated.(*PullRequests)
 	m.Body(160, 20)
@@ -119,8 +124,21 @@ func TestPullRequestsThreadFetchFailureDoesNotLoseTheRow(t *testing.T) {
 	if _, isErr := m.Status(); !isErr {
 		t.Error("a thread fetch failure was not reported")
 	}
-	if !strings.Contains(m.Body(160, 20), "Retry webhooks") {
+	view := m.Body(160, 20)
+	if !strings.Contains(view, "Retry webhooks") {
 		t.Error("the row was lost when its thread fetch failed")
+	}
+	if strings.Contains(view, "0/0") {
+		t.Error("a failed fetch rendered as a pull request with no discussion")
+	}
+	if !strings.Contains(view, "…") {
+		t.Error("the count column did not stay unfetched after the failure")
+	}
+	// Task 10's bug: a failed lazy fetch left its in-flight guard set forever,
+	// so the row was skipped on every future selection and never retried.
+	// fetchThreads must still issue a command for this row.
+	if cmd := m.fetchThreads(); cmd == nil {
+		t.Error("a failed fetch left the in-flight guard set, blocking a retry")
 	}
 }
 
