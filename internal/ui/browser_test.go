@@ -94,6 +94,64 @@ func TestBrowserFilteringSwallowsActionKeys(t *testing.T) {
 	}
 }
 
+func TestBrowserDetailFollowsAFilterThatMovesTheRowUnderTheCursor(t *testing.T) {
+	// bubbles/list answers a filter keystroke with an async command that
+	// resolves, on a later tick, to a list.FilterMatchesMsg replacing the
+	// matched set — without touching the cursor. Rows are picked so that only
+	// one of them can possibly match the query, which makes the outcome
+	// deterministic regardless of the fuzzy matcher's internal scoring: after
+	// "/" the cursor sits at index 0 on the unfiltered set (row 1), and it
+	// must still report index 0 once the query has narrowed the set down to
+	// the single row that actually matches (row 2) — proving the pane can't
+	// rely on the cursor index alone to notice its row changed underneath it.
+	b := NewBrowser()
+	b.Detail = func(r Row, width int) string { return "detail for " + r.CopyID() }
+	b.SetRows([]Row{
+		fakeRow{1, "aaa"},
+		fakeRow{2, "bbb"},
+		fakeRow{3, "ccc"},
+	})
+	b.SetSize(100, 20)
+
+	b.Update(runes("/"))
+	if !b.Filtering() {
+		t.Fatal("pressing / did not start filtering")
+	}
+	if row, ok := b.Selected(); !ok || row.CopyID() != "1" {
+		t.Fatalf("filtering should open on the unfiltered set with the cursor at the top, got %+v ok=%v", row, ok)
+	}
+
+	// Typing "b" queues a batch holding the cursor's blink command and the
+	// filter command. The blink command blocks on a real timer and is
+	// irrelevant here, so only the filter command's result — the last one
+	// appended, per list.Model.handleFiltering — is run and fed back in, the
+	// way the bubbletea runtime would deliver it on its own tick.
+	cmd := b.Update(runes("b"))
+	if cmd == nil {
+		t.Fatal("typing into the filter should have queued the async match")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("expected a batch of commands from the filter keystroke, got %#v", batch)
+	}
+	filterCmd := batch[len(batch)-1]
+	if filterCmd == nil {
+		t.Fatal("the filter command in the batch was nil")
+	}
+	b.Update(filterCmd())
+
+	row, ok := b.Selected()
+	if !ok {
+		t.Fatal("Selected returned nothing once the filter narrowed to one row")
+	}
+	if row.CopyID() != "2" {
+		t.Fatalf("selected = %s, want 2 — the only row matching %q", row.CopyID(), "b")
+	}
+	if !strings.Contains(b.View(), "detail for 2") {
+		t.Errorf("the detail pane did not follow the filtered selection:\n%s", b.View())
+	}
+}
+
 func TestSharedActionHandlesTheThreeCommonKeys(t *testing.T) {
 	row := fakeRow{42, "a thing"}
 

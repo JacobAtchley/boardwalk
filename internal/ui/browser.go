@@ -102,18 +102,33 @@ func (b *Browser) Selected() (Row, bool) {
 	return it.Row, true
 }
 
-// Update forwards a message to the list and re-renders the detail pane when the
-// cursor has moved.
+// Update forwards a message to the list and re-renders the detail pane when
+// the selected row has changed.
+//
+// Comparing the row rather than the cursor position is deliberate: filtering
+// replaces the matched set asynchronously, via a list.FilterMatchesMsg that
+// arrives on a later tick, without moving the cursor. The row sitting at the
+// cursor's index can therefore change while the index itself does not, and an
+// index comparison alone would miss it, leaving the pane on stale data as the
+// query narrows.
 func (b *Browser) Update(msg tea.Msg) tea.Cmd {
-	before := b.list.Index()
+	before, hadBefore := b.Selected()
 
 	var cmd tea.Cmd
 	b.list, cmd = b.list.Update(msg)
 
-	if b.list.Index() != before {
+	after, hasAfter := b.Selected()
+	if hadBefore != hasAfter || (hasAfter && rowChanged(before, after)) {
 		b.renderDetail()
 	}
 	return cmd
+}
+
+// rowChanged reports whether two rows differ by identity rather than value —
+// CopyID is the one thing every Row promises is unique within a view, which
+// makes it the natural key for "is this still the same row".
+func rowChanged(a, b Row) bool {
+	return a.CopyID() != b.CopyID()
 }
 
 // RefreshDetail re-renders the pane in place, for a view whose detail data
