@@ -48,7 +48,7 @@ func TestPickRepo(t *testing.T) {
 
 func TestBranchPromptOpensPrefilledAndIsEditable(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+	m := sized(t, NewWorkItems(c, items, false))
 
 	m, _ = press(t, m, runes("b"))
 	if m.branchPrompt == nil {
@@ -66,7 +66,7 @@ func TestBranchPromptOpensPrefilledAndIsEditable(t *testing.T) {
 
 func TestBranchPromptEscapeCancels(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+	m := sized(t, NewWorkItems(c, items, false))
 
 	m, _ = press(t, m, runes("b"))
 	m, cmd := press(t, m, tea.KeyMsg{Type: tea.KeyEsc})
@@ -81,7 +81,7 @@ func TestBranchPromptEscapeCancels(t *testing.T) {
 func TestBranchPromptSwallowsActionKeys(t *testing.T) {
 	// With the prompt open, "o" is a letter rather than the open action.
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+	m := sized(t, NewWorkItems(c, items, false))
 
 	m, _ = press(t, m, runes("b"))
 	m, _ = press(t, m, runes("o"))
@@ -94,7 +94,7 @@ func TestBranchDoneReportsEveryStep(t *testing.T) {
 	// #4020 starts life as "Needs Refinement" in the fixture, so a row
 	// picking up Active is evidence of the sync rather than a coincidence.
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+	m := sized(t, NewWorkItems(c, items, false))
 
 	updated, cmd := m.Update(branchDoneMsg{BranchResult{
 		Branch:    "feature/4020-tidy",
@@ -127,7 +127,7 @@ func TestBranchDoneKeepsTheStepsThatSucceeded(t *testing.T) {
 	// failing on the link step. Both of those landed on the server — the
 	// state change included — even though the flow as a whole failed.
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+	m := sized(t, NewWorkItems(c, items, false))
 
 	updated, cmd := m.Update(branchDoneMsg{BranchResult{
 		Branch:    "feature/4020-tidy",
@@ -159,7 +159,7 @@ func TestBranchDoneLeavesTheRowAloneWhenActivationNeverHappened(t *testing.T) {
 	// The flow failed before the state-change step ran at all — nothing
 	// landed on the server, so the row must not move.
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+	m := sized(t, NewWorkItems(c, items, false))
 	before := rowLine(t, m, 4020)
 
 	updated, _ := m.Update(branchDoneMsg{BranchResult{
@@ -176,7 +176,7 @@ func TestBranchDoneLeavesTheRowAloneWhenActivationNeverHappened(t *testing.T) {
 
 func TestSetStateReportsOnTheStatusLine(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+	m := sized(t, NewWorkItems(c, items, false))
 
 	updated, _ := m.Update(stateSetMsg{ID: 4021, State: "Active"})
 	m = updated.(*WorkItems)

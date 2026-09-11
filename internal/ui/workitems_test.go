@@ -25,9 +25,15 @@ func fixture() (*azdo.Client, []azdo.WorkItem) {
 	}
 }
 
-func sized(t *testing.T, m *WorkItems, w, h int) *WorkItems {
+// testWidth and testHeight are the one terminal size the work item tests drive
+// at. body() used to paint at a height of its own, unrelated to the one the
+// view had been driven at, so a test could assert against a frame no sequence
+// of messages could actually have produced.
+const testWidth, testHeight = 120, 24
+
+func sized(t *testing.T, m *WorkItems) *WorkItems {
 	t.Helper()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: testWidth, Height: testHeight})
 	return updated.(*WorkItems)
 }
 
@@ -39,10 +45,7 @@ func press(t *testing.T, m *WorkItems, key tea.KeyMsg) (*WorkItems, tea.Cmd) {
 
 func body(t *testing.T, m *WorkItems) string {
 	t.Helper()
-	// Matches the height sized() uses: the fixture's description and
-	// acceptance criteria text is long enough that a shorter viewport
-	// clips the discussion before it scrolls into view.
-	return m.Body(120, 24)
+	return m.Body(testWidth, testHeight)
 }
 
 func runes(s string) tea.KeyMsg {
@@ -51,7 +54,7 @@ func runes(s string) tea.KeyMsg {
 
 func TestViewRendersListAndDetailSideBySide(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 20)
+	m := sized(t, NewWorkItems(c, items, false))
 	out := body(t, m)
 	t.Logf("\n%s", out)
 
@@ -79,7 +82,7 @@ func TestViewRendersListAndDetailSideBySide(t *testing.T) {
 
 func TestToggleSwitchesScope(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 20)
+	m := sized(t, NewWorkItems(c, items, false))
 	if !strings.Contains(m.Title(), "all 3") {
 		t.Fatalf("title = %q, want all 3", m.Title())
 	}
@@ -98,7 +101,7 @@ func TestToggleSwitchesScope(t *testing.T) {
 func TestMineScopeStartsEmptyWhenIdentityUnknown(t *testing.T) {
 	_, items := fixture()
 	c := &azdo.Client{Org: "acme", Project: "Platform"} // az account show failed
-	m := sized(t, NewWorkItems(c, items, true), 120, 20)
+	m := sized(t, NewWorkItems(c, items, true))
 
 	if !strings.Contains(m.Title(), "mine 0") {
 		t.Errorf("title = %q, want mine 0 — an empty identity must not match every item", m.Title())
@@ -107,7 +110,7 @@ func TestMineScopeStartsEmptyWhenIdentityUnknown(t *testing.T) {
 
 func TestActionKeysAreInertWhileFiltering(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 20)
+	m := sized(t, NewWorkItems(c, items, false))
 
 	m, _ = press(t, m, runes("/"))
 	m, _ = press(t, m, runes("o"))
@@ -145,7 +148,7 @@ func TestWordwrapBreaksOnWords(t *testing.T) {
 
 func TestWorkItemsShowsAcceptanceCriteria(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+	m := sized(t, NewWorkItems(c, items, false))
 
 	if !strings.Contains(body(t, m), "Retries three times") {
 		t.Errorf("the detail pane is missing the acceptance criteria:\n%s", body(t, m))
@@ -169,7 +172,7 @@ func TestWorkItemsRequestsTheDiscussionForTheSelectedItem(t *testing.T) {
 
 func TestWorkItemsRendersAFetchedDiscussion(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+	m := sized(t, NewWorkItems(c, items, false))
 
 	updated, _ := m.Update(commentsMsg{ID: 4021, Comments: []azdo.Comment{
 		{Author: "Other Dev", Created: time.Now().Add(-2 * time.Hour), Text: "Why the retry cap?"},
@@ -185,7 +188,7 @@ func TestWorkItemsRendersAFetchedDiscussion(t *testing.T) {
 func TestWorkItemsIgnoresADiscussionForAnotherItem(t *testing.T) {
 	// A slow fetch can land after the cursor has moved on.
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+	m := sized(t, NewWorkItems(c, items, false))
 
 	updated, _ := m.Update(commentsMsg{ID: 3998, Comments: []azdo.Comment{
 		{Author: "Other Dev", Text: "stale comment"},
@@ -199,7 +202,7 @@ func TestWorkItemsIgnoresADiscussionForAnotherItem(t *testing.T) {
 
 func TestWorkItemsToggleSwitchesScope(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+	m := sized(t, NewWorkItems(c, items, false))
 
 	if !strings.Contains(m.Title(), "all 3") {
 		t.Errorf("title = %q, want the full count", m.Title())
@@ -212,7 +215,7 @@ func TestWorkItemsToggleSwitchesScope(t *testing.T) {
 
 func TestWorkItemsErrorGoesToTheStatusLine(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+	m := sized(t, NewWorkItems(c, items, false))
 
 	updated, _ := m.Update(ErrMsg{Err: errors.New("no network")})
 	m = updated.(*WorkItems)
@@ -229,7 +232,7 @@ func TestWorkItemsErrorGoesToTheStatusLine(t *testing.T) {
 
 func TestWorkItemsRecoversFromAFailedDiscussionFetch(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+	m := sized(t, NewWorkItems(c, items, false))
 
 	updated, _ := m.Update(commentsErrMsg{ID: 4021, Err: errors.New("could not load the discussion for #4021: timeout")})
 	m = updated.(*WorkItems)

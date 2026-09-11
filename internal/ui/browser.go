@@ -80,7 +80,17 @@ func (b *Browser) SetRows(rows []Row) {
 
 // SetSize splits width between the list and the detail pane, and re-renders
 // the detail pane to the new width.
+//
+// The early return is load-bearing rather than an optimisation. Every view's
+// Body calls this on every frame, and bubbletea repaints after every message,
+// so without the guard the re-render below — and the GotoTop inside it — ran
+// after every keystroke. ctrl+d moved the detail offset and the very next
+// repaint put it back, which made the detail pane look as though it could not
+// scroll at all.
 func (b *Browser) SetSize(width, height int) {
+	if width == b.width && height == b.height {
+		return
+	}
 	b.width, b.height = width, height
 
 	listWidth := int(float64(width) * listShare)
