@@ -103,6 +103,78 @@ func TestLogsEscapePops(t *testing.T) {
 	}
 }
 
+func TestLogsRDoesNotDuplicateAnOutstandingFetch(t *testing.T) {
+	m := newLogs(t, azdo.StatusRunning)
+	m.fetching = true // as if a tick's fetch were already in flight
+
+	_, cmd := m.Update(runes("r"))
+	if cmd != nil {
+		t.Error("r started a second fetch while one was already outstanding — " +
+			"two fetches running at once would race on the cursor map")
+	}
+}
+
+func TestLogsFetchingClearsOnErrorSoTheNextTickFetches(t *testing.T) {
+	m := newLogs(t, azdo.StatusRunning)
+	m.fetching = true // as if fetch() were already outstanding
+
+	updated, _ := m.Update(logChunksMsg{Err: errTest})
+	m = updated.(*Logs)
+
+	_, cmd := m.Update(tailTickMsg{})
+	if cmd == nil {
+		t.Error("the fetching guard was not cleared on a failed poll, blocking the next tick")
+	}
+}
+
+func TestNeedsTimelineRefresh(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  azdo.BuildStatus
+		records []azdo.Record
+		want    bool
+	}{
+		{"running, timeline already loaded", azdo.StatusRunning, []azdo.Record{{Name: "Build"}}, true},
+		{"running, no timeline yet", azdo.StatusRunning, nil, true},
+		{"done, timeline already loaded", azdo.StatusSucceeded, []azdo.Record{{Name: "Build"}}, false},
+		{"done, timeline never loaded", azdo.StatusSucceeded, nil, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := needsTimelineRefresh(c.status, c.records); got != c.want {
+				t.Errorf("needsTimelineRefresh(%v, %v) = %v, want %v", c.status, c.records, got, c.want)
+			}
+		})
+	}
+}
+
+func TestLogsOnADoneBuildWithNoRecordsCatchesUpInsteadOfStickingOnThePlaceholder(t *testing.T) {
+	c := &azdo.Client{Org: "acme", Project: "Platform"}
+	build := azdo.Build{ID: 9001, Number: "20260911.3", Pipeline: "platform-ci", Status: azdo.StatusSucceeded}
+	// enter can beat the build view's own lazy timeline fetch, landing here
+	// with nothing to read yet.
+	m := NewLogs(c, build, nil)
+
+	if cmd := m.Init(); cmd == nil {
+		t.Fatal("a done build with no records did not fetch — it would be stuck on the placeholder forever")
+	}
+	if got := m.Body(120, 20); !strings.Contains(got, "fetching the build log…") {
+		t.Errorf("expected the placeholder before any chunks land, got:\n%s", got)
+	}
+
+	// Simulate that fetch landing: the timeline caught up and the log has text.
+	updated, _ := m.Update(logChunksMsg{
+		Status:  azdo.StatusSucceeded,
+		Records: []azdo.Record{{Name: "Build", Type: "Task", Order: 1, LogID: 7}},
+		Chunks:  []azdo.LogChunk{{Task: "Build", LogID: 7, Lines: []string{"compiled"}}},
+	})
+	m = updated.(*Logs)
+
+	if got := m.Body(120, 20); !strings.Contains(got, "compiled") {
+		t.Errorf("the pane stayed on the placeholder after the catch-up fetch landed:\n%s", got)
+	}
+}
+
 func TestLogsErrorIsReportedWithoutLosingTheText(t *testing.T) {
 	m := newLogs(t, azdo.StatusRunning)
 
