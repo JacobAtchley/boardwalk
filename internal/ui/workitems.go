@@ -3,267 +3,245 @@ package ui
 
 import (
 	"fmt"
-	"io"
 	"strings"
+	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
-// item adapts a work item to the list widget. FilterValue is what the fuzzy
-// matcher sees, so it spans id, type, state, assignee and title — typing
-// "25701" or "atchley defect" both land.
-type item struct{ azdo.WorkItem }
-
-func (i item) FilterValue() string {
-	return fmt.Sprintf("%d %s %s %s %s", i.ID, i.Type, i.State, i.Assigned, i.Title)
+// workItemRow adapts a work item to the browser. FilterValue spans id, type,
+// state, assignee and title, so typing "25701" or "atchley defect" both land.
+type workItemRow struct {
+	azdo.WorkItem
+	url string
 }
 
-type itemDelegate struct{ width int }
-
-func (d itemDelegate) Height() int                         { return 1 }
-func (d itemDelegate) Spacing() int                        { return 0 }
-func (d itemDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
-
-func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
-	it, ok := listItem.(item)
-	if !ok {
-		return
-	}
-
-	row := fmt.Sprintf("%-7d %-14s %-16s %-18s %s",
-		it.ID,
-		truncate("["+it.Type+"]", 14),
-		truncate(it.State, 16),
-		truncate(it.Assigned, 18),
-		it.Title)
-	row = truncate(row, d.width)
-
-	if index == m.Index() {
-		fmt.Fprint(w, selectedRow.Render("▸ "+row))
-		return
-	}
-	fmt.Fprint(w, normalRow.Render("  "+row))
+func (r workItemRow) FilterValue() string {
+	return fmt.Sprintf("%d %s %s %s %s", r.ID, r.Type, r.State, r.Assigned, r.Title)
 }
 
-type keymap struct {
-	toggle key.Binding
-	open   key.Binding
-	copyID key.Binding
-	slack  key.Binding
-	branch key.Binding
-	quit   key.Binding
+func (r workItemRow) Render(width int) string {
+	return truncate(fmt.Sprintf("%-7d %-14s %-16s %-18s %s",
+		r.ID,
+		truncate("["+r.Type+"]", 14),
+		truncate(r.State, 16),
+		truncate(r.Assigned, 18),
+		r.Title), width)
 }
 
-var keys = keymap{
-	toggle: key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("^t", "mine/all")),
-	open:   key.NewBinding(key.WithKeys("ctrl+o", "o"), key.WithHelp("o", "open")),
-	copyID: key.NewBinding(key.WithKeys("ctrl+y", "y"), key.WithHelp("y", "copy id")),
-	slack:  key.NewBinding(key.WithKeys("ctrl+s", "s"), key.WithHelp("s", "slack")),
-	branch: key.NewBinding(key.WithKeys("ctrl+b", "b"), key.WithHelp("b", "branch")),
-	quit:   key.NewBinding(key.WithKeys("q", "esc", "ctrl+c"), key.WithHelp("q", "quit")),
+func (r workItemRow) CopyID() string { return fmt.Sprint(r.ID) }
+func (r workItemRow) Label() string  { return fmt.Sprintf("#%d %s", r.ID, r.Title) }
+func (r workItemRow) URL() string    { return r.url }
+
+// commentsMsg carries a fetched discussion. It names the work item it belongs
+// to because a slow fetch can land after the cursor has moved on.
+type commentsMsg struct {
+	ID       int
+	Comments []azdo.Comment
 }
 
 // WorkItems is the work item browser.
 type WorkItems struct {
-	client *azdo.Client
-	list   list.Model
-	detail viewport.Model
+	client  *azdo.Client
+	browser Browser
 
-	all      []item
-	mine     []item
+	all      []Row
+	mine     []Row
 	mineOnly bool
 
-	width, height int
-	status        string
+	// comments is keyed by work item id and filled lazily as the cursor moves.
+	comments map[int][]azdo.Comment
+	loading  map[int]bool
 
-	// Command is set when the user picks an action that has to run in the
-	// parent shell. A child process can neither change the shell's directory
-	// nor drive its line editor, so the command is printed on exit instead.
-	Command string
+	status string
+	failed bool
+	now    func() time.Time
 }
 
-func NewWorkItems(c *azdo.Client, items []azdo.WorkItem, mineOnly bool) WorkItems {
-	var all, mine []item
+// NewWorkItems builds the work item browser from a fetched batch, splitting
+// out the caller's own items up front so toggling scope is instant.
+func NewWorkItems(c *azdo.Client, items []azdo.WorkItem, mineOnly bool) *WorkItems {
+	m := &WorkItems{
+		client:   c,
+		browser:  NewBrowser(),
+		mineOnly: mineOnly,
+		comments: map[int][]azdo.Comment{},
+		loading:  map[int]bool{},
+		now:      time.Now,
+	}
+
 	for _, wi := range items {
-		it := item{wi}
-		all = append(all, it)
-		if c.Me != "" && it.AssignedKey == c.Me {
-			mine = append(mine, it)
+		row := workItemRow{wi, c.WorkItemURL(wi.ID)}
+		m.all = append(m.all, row)
+		if c.Me != "" && wi.AssignedKey == c.Me {
+			m.mine = append(m.mine, row)
 		}
 	}
 
-	l := list.New(nil, itemDelegate{width: 80}, 0, 0)
-	// The list keeps a title-bar row for the filter prompt even with the title
-	// hidden, which would push the rows a line below the detail pane. The
-	// filter input is rendered on boardwalk's own status line instead.
-	l.SetShowTitle(false)
-	l.SetShowFilter(false)
-	l.Styles.TitleBar = lipgloss.NewStyle()
-	l.SetShowStatusBar(false)
-	l.SetShowHelp(false)
-	l.SetFilteringEnabled(true)
-	l.InfiniteScrolling = false
-
-	m := WorkItems{
-		client:   c,
-		list:     l,
-		detail:   viewport.New(0, 0),
-		all:      all,
-		mine:     mine,
-		mineOnly: mineOnly,
-	}
+	m.browser.Detail = m.renderDetail
 	m.applyScope()
 	return m
 }
 
+// Init asks for the first selected item's discussion.
+func (m *WorkItems) Init() tea.Cmd { return m.fetchComments() }
+
 func (m *WorkItems) applyScope() {
-	src := m.all
+	rows := m.all
 	if m.mineOnly {
-		src = m.mine
+		rows = m.mine
 	}
-	items := make([]list.Item, len(src))
-	for i, it := range src {
-		items[i] = it
-	}
-	m.list.SetItems(items)
+	m.browser.SetRows(rows)
 }
 
-func (m WorkItems) Init() tea.Cmd { return nil }
-
-func (m *WorkItems) selected() (item, bool) {
-	it, ok := m.list.SelectedItem().(item)
+func (m *WorkItems) selected() (workItemRow, bool) {
+	row, ok := m.browser.Selected()
+	if !ok {
+		return workItemRow{}, false
+	}
+	it, ok := row.(workItemRow)
 	return it, ok
 }
 
-func (m WorkItems) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		listWidth := msg.Width * 3 / 5
-		detailWidth := msg.Width - listWidth - 4
-		body := msg.Height - 3 // header, hints, status
+// fetchComments loads the selected item's discussion unless it is already
+// loaded or in flight.
+func (m *WorkItems) fetchComments() tea.Cmd {
+	it, ok := m.selected()
+	if !ok {
+		return nil
+	}
+	if _, done := m.comments[it.ID]; done || m.loading[it.ID] {
+		return nil
+	}
 
-		m.list.SetSize(listWidth, body)
-		m.list.SetDelegate(itemDelegate{width: listWidth - 2})
-		m.detail.Width = detailWidth
-		m.detail.Height = body
-		m.renderDetail()
+	m.loading[it.ID] = true
+	client, id := m.client, it.ID
+	return func() tea.Msg {
+		comments, err := client.Comments(id)
+		if err != nil {
+			return ErrMsg{Err: fmt.Errorf("could not load the discussion for #%d: %w", id, err)}
+		}
+		return commentsMsg{ID: id, Comments: comments}
+	}
+}
+
+// Update handles input and fetch results. It satisfies View.
+func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
+	switch msg := msg.(type) {
+	case commentsMsg:
+		delete(m.loading, msg.ID)
+		m.comments[msg.ID] = msg.Comments
+		if it, ok := m.selected(); ok && it.ID == msg.ID {
+			m.browser.RefreshDetail()
+		}
+		return m, nil
+
+	case ErrMsg:
+		m.status, m.failed = msg.Err.Error(), true
+		return m, nil
+
+	case StatusMsg:
+		m.status, m.failed = msg.Text, msg.Err
 		return m, nil
 
 	case tea.KeyMsg:
 		// While the filter prompt is open every key belongs to it, or typing
 		// "o" would open a browser instead of entering a letter.
-		if m.list.FilterState() == list.Filtering {
+		if m.browser.Filtering() {
 			break
 		}
 
-		switch {
-		case key.Matches(msg, keys.toggle):
+		if it, ok := m.selected(); ok {
+			if status, handled := SharedAction(it, msg); handled {
+				m.status, m.failed = status, false
+				return m, nil
+			}
+		}
+
+		switch msg.String() {
+		case "ctrl+t":
 			m.mineOnly = !m.mineOnly
 			m.applyScope()
-			m.renderDetail()
-			return m, nil
-
-		case key.Matches(msg, keys.open):
-			if it, ok := m.selected(); ok {
-				OpenBrowser(m.client.WorkItemURL(it.ID))
-				m.status = fmt.Sprintf("opened #%d", it.ID)
-			}
-			return m, nil
-
-		case key.Matches(msg, keys.copyID):
-			if it, ok := m.selected(); ok {
-				CopyToClipboard(fmt.Sprint(it.ID))
-				m.status = fmt.Sprintf("copied id %d", it.ID)
-			}
-			return m, nil
-
-		case key.Matches(msg, keys.slack):
-			if it, ok := m.selected(); ok {
-				CopyToClipboard(SlackLink(fmt.Sprintf("#%d %s", it.ID, it.Title), m.client.WorkItemURL(it.ID)))
-				m.status = fmt.Sprintf("copied Slack link for #%d", it.ID)
-			}
-			return m, nil
-
-		case key.Matches(msg, keys.branch):
-			if it, ok := m.selected(); ok {
-				m.Command = fmt.Sprintf("azdo-branch %d", it.ID)
-				return m, tea.Quit
-			}
-			return m, nil
-
-		case key.Matches(msg, keys.quit):
-			return m, tea.Quit
+			return m, m.fetchComments()
 		}
 	}
 
-	before := m.list.Index()
-	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
-	if m.list.Index() != before {
-		m.renderDetail()
-	}
-	return m, cmd
+	cmd := m.browser.Update(msg)
+	return m, tea.Batch(cmd, m.fetchComments())
 }
 
-func (m *WorkItems) renderDetail() {
-	it, ok := m.selected()
+func (m *WorkItems) renderDetail(row Row, width int) string {
+	it, ok := row.(workItemRow)
 	if !ok {
-		m.detail.SetContent("")
-		return
+		return ""
 	}
 
-	width := max(20, m.detail.Width-2)
-
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\n", detailTitle.Render(truncate(fmt.Sprintf("#%d  %s", it.ID, it.Title), width)))
-	for _, row := range [][2]string{
+	fmt.Fprintf(&b, "%s\n\n", detailTitle.Render(truncate(it.Label(), width)))
+	for _, field := range [][2]string{
 		{"type", it.Type},
 		{"state", it.State},
 		{"assigned", it.Assigned},
 		{"tags", orDash(strings.ReplaceAll(it.Tags, "; ", ", "))},
 		{"iteration", orDash(it.Iteration)},
 	} {
-		label := labelStyle.Render(fmt.Sprintf("%-10s", row[0]+":"))
-		fmt.Fprintf(&b, "%s %s\n", label, truncate(row[1], width-11))
+		fmt.Fprintf(&b, "%s %s\n",
+			labelStyle.Render(fmt.Sprintf("%-10s", field[0]+":")),
+			truncate(field[1], width-11))
 	}
 
-	desc := it.Description
-	if desc == "" {
-		desc = "(no description)"
-	}
-	fmt.Fprintf(&b, "\n%s\n", wordwrap(desc, width))
+	section(&b, "description", it.Description, "(no description)", width)
+	section(&b, "acceptance criteria", it.AcceptanceCriteria, "(none)", width)
 
-	m.detail.SetContent(b.String())
-	m.detail.GotoTop()
+	fmt.Fprintf(&b, "\n%s\n", labelStyle.Render("discussion"))
+	switch comments, loaded := m.comments[it.ID]; {
+	case !loaded:
+		fmt.Fprintf(&b, "%s\n", chromeStyle.Render("loading…"))
+	case len(comments) == 0:
+		fmt.Fprintf(&b, "%s\n", chromeStyle.Render("(no comments)"))
+	default:
+		for _, c := range comments {
+			fmt.Fprintf(&b, "\n%s\n%s\n",
+				labelStyle.Render(fmt.Sprintf("%s · %s", c.Author, humanAge(c.Created, m.now()))),
+				wordwrap(c.Text, width))
+		}
+	}
+	return b.String()
 }
 
-func (m WorkItems) View() string {
-	if m.width == 0 {
-		return "loading…"
+// section writes a titled block, or a placeholder when the field is empty.
+func section(b *strings.Builder, title, text, empty string, width int) {
+	if strings.TrimSpace(text) == "" {
+		text = empty
 	}
+	fmt.Fprintf(b, "\n%s\n%s\n", labelStyle.Render(title), wordwrap(text, width))
+}
 
+// Body renders the browser at the size Root has left for it.
+func (m *WorkItems) Body(width, height int) string {
+	m.browser.SetSize(width, height)
+	return m.browser.View()
+}
+
+// Title reports the current scope and the project the items belong to.
+func (m *WorkItems) Title() string {
 	scope := fmt.Sprintf("all %d", len(m.all))
 	if m.mineOnly {
 		scope = fmt.Sprintf("mine %d", len(m.mine))
 	}
-	header := chromeStyle.Render(fmt.Sprintf("work items (%s) · %s/%s", scope, m.client.Org, m.client.Project))
-	hints := chromeStyle.Render("^t mine/all · / filter · o open · y copy id · s slack · b branch · q quit")
+	return fmt.Sprintf("work items (%s) · %s/%s", scope, m.client.Org, m.client.Project)
+}
 
-	body := lipgloss.JoinHorizontal(lipgloss.Top,
-		m.list.View(),
-		detailPane.Render(m.detail.View()),
-	)
+// Hints is the key line at the bottom.
+func (m *WorkItems) Hints() string {
+	return "^t mine/all · " + SharedHints + " · esc back"
+}
 
-	status := statusStyle.Render(m.status)
-	if m.list.FilterState() == list.Filtering {
-		status = m.list.FilterInput.View()
+// Status is the transient status line, or the filter prompt while it is open.
+func (m *WorkItems) Status() (string, bool) {
+	if m.browser.Filtering() {
+		return m.browser.FilterView(), false
 	}
-
-	return strings.Join([]string{header, body, hints, status}, "\n")
+	return m.status, m.failed
 }

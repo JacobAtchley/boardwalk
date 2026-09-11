@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
 	tea "github.com/charmbracelet/bubbletea"
@@ -14,7 +16,8 @@ func fixture() (*azdo.Client, []azdo.WorkItem) {
 		{ID: 4021, Title: "Retry webhook delivery on 5xx", Type: "User Story", State: "Active",
 			Assigned: "Dev Example", AssignedKey: "dev@acme.test",
 			Tags: "webhooks; reliability", Iteration: `Platform\Sprint 42`,
-			Description: "Deliveries that fail with a 5xx should retry with exponential backoff rather than dropping on the floor."},
+			Description:        "Deliveries that fail with a 5xx should retry with exponential backoff rather than dropping on the floor.",
+			AcceptanceCriteria: "Retries three times with exponential backoff before giving up."},
 		{ID: 4020, Title: "Tidy up the settings page copy", Type: "Enhancement",
 			State: "Needs Refinement", Assigned: "(unassigned)"},
 		{ID: 3998, Title: "Cache tenant lookups", Type: "Feature", State: "Pending QA",
@@ -22,16 +25,24 @@ func fixture() (*azdo.Client, []azdo.WorkItem) {
 	}
 }
 
-func sized(t *testing.T, m WorkItems, w, h int) WorkItems {
+func sized(t *testing.T, m *WorkItems, w, h int) *WorkItems {
 	t.Helper()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
-	return updated.(WorkItems)
+	return updated.(*WorkItems)
 }
 
-func press(t *testing.T, m WorkItems, key tea.KeyMsg) (WorkItems, tea.Cmd) {
+func press(t *testing.T, m *WorkItems, key tea.KeyMsg) (*WorkItems, tea.Cmd) {
 	t.Helper()
 	updated, cmd := m.Update(key)
-	return updated.(WorkItems), cmd
+	return updated.(*WorkItems), cmd
+}
+
+func body(t *testing.T, m *WorkItems) string {
+	t.Helper()
+	// Matches the height sized() uses: the fixture's description and
+	// acceptance criteria text is long enough that a shorter viewport
+	// clips the discussion before it scrolls into view.
+	return m.Body(120, 24)
 }
 
 func runes(s string) tea.KeyMsg {
@@ -40,13 +51,20 @@ func runes(s string) tea.KeyMsg {
 
 func TestViewRendersListAndDetailSideBySide(t *testing.T) {
 	c, items := fixture()
-	out := sized(t, NewWorkItems(c, items, false), 120, 20).View()
+	m := sized(t, NewWorkItems(c, items, false), 120, 20)
+	out := body(t, m)
 	t.Logf("\n%s", out)
 
-	for _, want := range []string{"work items (all 3)", "acme/Platform", "4021", "Retry webhook delivery", "assigned", "^t mine/all"} {
+	for _, want := range []string{"4021", "Retry webhook delivery", "assigned"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("view is missing %q", want)
 		}
+	}
+	if !strings.Contains(m.Title(), "work items (all 3)") || !strings.Contains(m.Title(), "acme/Platform") {
+		t.Errorf("title = %q, missing expected pieces", m.Title())
+	}
+	if !strings.Contains(m.Hints(), "^t mine/all") {
+		t.Errorf("hints = %q, missing toggle hint", m.Hints())
 	}
 
 	// The detail pane must sit beside the list, not beneath it: the first row
@@ -62,21 +80,18 @@ func TestViewRendersListAndDetailSideBySide(t *testing.T) {
 func TestToggleSwitchesScope(t *testing.T) {
 	c, items := fixture()
 	m := sized(t, NewWorkItems(c, items, false), 120, 20)
-	if got := len(m.list.Items()); got != 3 {
-		t.Fatalf("all scope: got %d items, want 3", got)
+	if !strings.Contains(m.Title(), "all 3") {
+		t.Fatalf("title = %q, want all 3", m.Title())
 	}
 
 	m, _ = press(t, m, tea.KeyMsg{Type: tea.KeyCtrlT})
-	if got := len(m.list.Items()); got != 2 {
-		t.Fatalf("mine scope: got %d items, want 2", got)
-	}
-	if !strings.Contains(m.View(), "work items (mine 2)") {
+	if !strings.Contains(m.Title(), "mine 2") {
 		t.Error("header should report the mine scope")
 	}
 
 	m, _ = press(t, m, tea.KeyMsg{Type: tea.KeyCtrlT})
-	if got := len(m.list.Items()); got != 3 {
-		t.Fatalf("back to all: got %d items, want 3", got)
+	if !strings.Contains(m.Title(), "all 3") {
+		t.Error("back to all: want all 3")
 	}
 }
 
@@ -85,21 +100,8 @@ func TestMineScopeStartsEmptyWhenIdentityUnknown(t *testing.T) {
 	c := &azdo.Client{Org: "acme", Project: "Platform"} // az account show failed
 	m := sized(t, NewWorkItems(c, items, true), 120, 20)
 
-	if got := len(m.list.Items()); got != 0 {
-		t.Errorf("got %d items, want 0 — an empty identity must not match every item", got)
-	}
-}
-
-func TestBranchActionHandsACommandToTheShell(t *testing.T) {
-	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 20)
-
-	m, cmd := press(t, m, runes("b"))
-	if got, want := m.Command, "azdo-branch 4021"; got != want {
-		t.Errorf("Command = %q, want %q", got, want)
-	}
-	if cmd == nil {
-		t.Error("branch action should quit so the shell can run the command")
+	if !strings.Contains(m.Title(), "mine 0") {
+		t.Errorf("title = %q, want mine 0 — an empty identity must not match every item", m.Title())
 	}
 }
 
@@ -108,10 +110,11 @@ func TestActionKeysAreInertWhileFiltering(t *testing.T) {
 	m := sized(t, NewWorkItems(c, items, false), 120, 20)
 
 	m, _ = press(t, m, runes("/"))
-	m, _ = press(t, m, runes("b"))
+	m, _ = press(t, m, runes("o"))
 
-	if m.Command != "" {
-		t.Error("typing 'b' into the filter must not trigger the branch action")
+	status, isErr := m.Status()
+	if strings.Contains(status, "opened") || isErr {
+		t.Error("typing 'o' into the filter must not trigger the open action")
 	}
 }
 
@@ -137,5 +140,89 @@ func TestWordwrapBreaksOnWords(t *testing.T) {
 	want := "one two\nthree\nfour"
 	if got != want {
 		t.Errorf("wordwrap = %q, want %q", got, want)
+	}
+}
+
+func TestWorkItemsShowsAcceptanceCriteria(t *testing.T) {
+	c, items := fixture()
+	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+
+	if !strings.Contains(body(t, m), "Retries three times") {
+		t.Errorf("the detail pane is missing the acceptance criteria:\n%s", body(t, m))
+	}
+}
+
+func TestWorkItemsRequestsTheDiscussionForTheSelectedItem(t *testing.T) {
+	c, items := fixture()
+	// Deliberately not routed through sized(): that helper drives Update,
+	// which also kicks off the fetch as a side effect (so the cursor can
+	// pick up a newly-scrolled-to row's discussion). Calling it first would
+	// mark the fetch in flight before Init ever ran, defeating the point of
+	// this test. In production Init runs first, before any other message.
+	m := NewWorkItems(c, items, false)
+
+	// The fetch is a command rather than a call, so the test can run it or not.
+	if cmd := m.Init(); cmd == nil {
+		t.Fatal("the view did not ask for the selected item's discussion")
+	}
+}
+
+func TestWorkItemsRendersAFetchedDiscussion(t *testing.T) {
+	c, items := fixture()
+	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+
+	updated, _ := m.Update(commentsMsg{ID: 4021, Comments: []azdo.Comment{
+		{Author: "Other Dev", Created: time.Now().Add(-2 * time.Hour), Text: "Why the retry cap?"},
+	}})
+	m = updated.(*WorkItems)
+
+	view := body(t, m)
+	if !strings.Contains(view, "Why the retry cap?") || !strings.Contains(view, "Other Dev") {
+		t.Errorf("the discussion did not render:\n%s", view)
+	}
+}
+
+func TestWorkItemsIgnoresADiscussionForAnotherItem(t *testing.T) {
+	// A slow fetch can land after the cursor has moved on.
+	c, items := fixture()
+	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+
+	updated, _ := m.Update(commentsMsg{ID: 3998, Comments: []azdo.Comment{
+		{Author: "Other Dev", Text: "stale comment"},
+	}})
+	m = updated.(*WorkItems)
+
+	if strings.Contains(body(t, m), "stale comment") {
+		t.Error("a discussion for an unselected item was rendered")
+	}
+}
+
+func TestWorkItemsToggleSwitchesScope(t *testing.T) {
+	c, items := fixture()
+	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+
+	if !strings.Contains(m.Title(), "all 3") {
+		t.Errorf("title = %q, want the full count", m.Title())
+	}
+	m, _ = press(t, m, tea.KeyMsg{Type: tea.KeyCtrlT})
+	if !strings.Contains(m.Title(), "mine 2") {
+		t.Errorf("title = %q, want the mine count", m.Title())
+	}
+}
+
+func TestWorkItemsErrorGoesToTheStatusLine(t *testing.T) {
+	c, items := fixture()
+	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+
+	updated, _ := m.Update(ErrMsg{Err: errors.New("no network")})
+	m = updated.(*WorkItems)
+
+	text, isErr := m.Status()
+	if !isErr || !strings.Contains(text, "no network") {
+		t.Errorf("status = %q, isErr = %v; want the error reported", text, isErr)
+	}
+	// The list must survive the failure.
+	if !strings.Contains(body(t, m), "Retry webhook delivery") {
+		t.Error("the rows were lost when a fetch failed")
 	}
 }
