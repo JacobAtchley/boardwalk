@@ -256,3 +256,24 @@ Development is test-first throughout.
 
 None. The branch name convention and the edit-before-create prompt were
 confirmed during design.
+
+## Amendments
+
+Three places where the implementation diverges from the text above, deliberately
+and correctly. They are recorded here so the next reader does not re-open them.
+
+**`q` does not exit from anywhere.** The View stack section says it does. It
+pops from a drill-down and quits only from a top-level view, because killing the
+program from the log pane — where `q` is the obvious way back to the build list —
+would be wrong. `esc` pops unconditionally and never quits. `ctrl+c` is the key
+that exits from anywhere, including while a prompt is open.
+
+**`View` carries a fifth method.** The interface above lists four; the
+implementation adds `Status() (string, bool)`. The status line is chrome, drawn
+by `Root` alongside the header and the hint line, so `Root` has to be able to ask
+the view on top what it says and whether it is an error.
+
+**The log pane does not bind the full shared key set.** It has no `/` and no
+`s`: it is a drill-down pager over one build's output, not a list of rows, so
+there is nothing to fuzzy-filter and no row to build a Slack link for. It binds
+`g`/`G`, `r`, `y`, `o`, and `esc`/`q` back. Log-pane search is on the roadmap.

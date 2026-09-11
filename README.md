@@ -28,8 +28,12 @@ cd boardwalk
 make install          # builds and drops the binary in ~/.local/bin
 ```
 
-Requires Go 1.24+, the [Azure CLI](https://learn.microsoft.com/cli/azure/), and
+Requires Go 1.27+, the [Azure CLI](https://learn.microsoft.com/cli/azure/), and
 a current `az login`.
+
+**macOS for now.** The copy and open actions shell out to `pbcopy` and `open`;
+nothing else is platform-specific. On a machine without them the status line
+says so rather than claiming the copy happened.
 
 ## Setup
 
@@ -52,10 +56,21 @@ boardwalk builds       # straight to pipeline builds
 boardwalk -mine        # work items assigned to you
 boardwalk -all         # include closed/done/resolved/removed
 boardwalk -dump        # print work item rows and exit — for scripts and pipes
-boardwalk -timing      # report fetch duration on stderr
+boardwalk -timing      # report the -dump fetch duration on stderr
 ```
 
-### Everywhere
+A subcommand comes first, before any flags: `boardwalk items -mine`, not
+`boardwalk -mine items`. The second form is an error rather than a silent
+misreading, since the flag package stops at the first non-flag word.
+
+Every view fetches when it is opened, so the menu paints immediately and a
+fetch that fails lands on the status line with `r` to try again, rather than
+taking the program down with it.
+
+### Every list view
+
+Work items, pull requests and builds share these. The log pane is a pager
+rather than a list and binds only its own keys, below.
 
 | key | |
 |---|---|
@@ -63,9 +78,14 @@ boardwalk -timing      # report fetch duration on stderr
 | `y` | copy the id |
 | `s` | copy a Slack message — `[#4021 title](link)` |
 | `o` | open in the browser |
+| `r` | refresh |
 | `^u` / `^d` | scroll the detail pane |
-| `esc` | back one level (or quit, from a top-level view) |
-| `q` | back one level (or quit, from a top-level view) |
+| `esc` | back to the menu |
+| `q` | quit |
+
+`esc` never quits: it pops one level, and from a top-level view that is the
+menu. `q` quits from a top-level view and goes back from a drill-down. `^c`
+quits from anywhere, including while a prompt is open.
 
 ### Work items
 
@@ -87,14 +107,16 @@ boardwalk -timing      # report fetch duration on stderr
 | key | |
 |---|---|
 | `enter` | open the logs |
-| `r` | refetch |
 
 ### Logs
 
 | key | |
 |---|---|
 | `g` / `G` | top / bottom |
-| `r` | refetch |
+| `r` | refresh |
+| `y` | copy the build id |
+| `o` | open the build in the browser |
+| `esc` / `q` | back to the build list |
 
 A running build's logs append on their own every few seconds, and stop when the
 build finishes.
