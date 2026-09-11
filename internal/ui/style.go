@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 
+	"github.com/JacobAtchley/boardwalk/internal/azdo"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -12,6 +13,9 @@ var (
 	colSelected = lipgloss.AdaptiveColor{Light: "27", Dark: "86"}
 	colLabel    = lipgloss.AdaptiveColor{Light: "240", Dark: "245"}
 	colOK       = lipgloss.AdaptiveColor{Light: "28", Dark: "42"}
+	colErr      = lipgloss.AdaptiveColor{Light: "160", Dark: "203"}
+	colWarn     = lipgloss.AdaptiveColor{Light: "130", Dark: "214"}
+	colDraft    = lipgloss.AdaptiveColor{Light: "97", Dark: "141"}
 
 	chromeStyle = lipgloss.NewStyle().Foreground(colDim)
 	selectedRow = lipgloss.NewStyle().Foreground(colSelected).Bold(true)
@@ -19,6 +23,12 @@ var (
 	detailTitle = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
 	labelStyle  = lipgloss.NewStyle().Foreground(colLabel)
 	statusStyle = lipgloss.NewStyle().Foreground(colOK)
+	errStyle    = lipgloss.NewStyle().Foreground(colErr)
+	warnStyle   = lipgloss.NewStyle().Foreground(colWarn)
+	draftStyle  = lipgloss.NewStyle().Foreground(colDraft)
+	bannerRow   = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
+	menuItem    = lipgloss.NewStyle().PaddingLeft(2)
+	menuPicked  = lipgloss.NewStyle().PaddingLeft(0).Foreground(colSelected).Bold(true)
 
 	detailPane = lipgloss.NewStyle().
 			BorderStyle(lipgloss.NormalBorder()).
@@ -66,4 +76,23 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// statusGlyph pairs a build status with a coloured marker, so the state reads
+// at a glance without the word taking a column of its own.
+func statusGlyph(s azdo.BuildStatus) string {
+	switch s {
+	case azdo.StatusRunning:
+		return warnStyle.Render("◐ running")
+	case azdo.StatusSucceeded:
+		return statusStyle.Render("✓ succeeded")
+	case azdo.StatusFailed:
+		return errStyle.Render("✗ failed")
+	case azdo.StatusPartial:
+		return warnStyle.Render("~ partial")
+	case azdo.StatusCanceled:
+		return chromeStyle.Render("⊘ canceled")
+	default:
+		return chromeStyle.Render("· queued")
+	}
 }

@@ -4,7 +4,6 @@ package ui
 import (
 	"fmt"
 	"io"
-	"os/exec"
 	"strings"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
@@ -172,21 +171,21 @@ func (m WorkItems) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, keys.open):
 			if it, ok := m.selected(); ok {
-				openBrowser(m.client.WorkItemURL(it.ID))
+				OpenBrowser(m.client.WorkItemURL(it.ID))
 				m.status = fmt.Sprintf("opened #%d", it.ID)
 			}
 			return m, nil
 
 		case key.Matches(msg, keys.copyID):
 			if it, ok := m.selected(); ok {
-				copyToClipboard(fmt.Sprint(it.ID))
+				CopyToClipboard(fmt.Sprint(it.ID))
 				m.status = fmt.Sprintf("copied id %d", it.ID)
 			}
 			return m, nil
 
 		case key.Matches(msg, keys.slack):
 			if it, ok := m.selected(); ok {
-				copyToClipboard(SlackLink(fmt.Sprintf("#%d %s", it.ID, it.Title), m.client.WorkItemURL(it.ID)))
+				CopyToClipboard(SlackLink(fmt.Sprintf("#%d %s", it.ID, it.Title), m.client.WorkItemURL(it.ID)))
 				m.status = fmt.Sprintf("copied Slack link for #%d", it.ID)
 			}
 			return m, nil
@@ -267,22 +266,4 @@ func (m WorkItems) View() string {
 	}
 
 	return strings.Join([]string{header, body, hints, status}, "\n")
-}
-
-// SlackLink renders a markdown link, which Slack's composer turns into a real
-// link on paste. Square brackets in the title would end the link text early, so
-// they become parentheses.
-func SlackLink(title, url string) string {
-	title = strings.NewReplacer("[", "(", "]", ")", "\n", " ", "\r", " ").Replace(title)
-	return fmt.Sprintf("[%s](%s)", strings.TrimSpace(title), url)
-}
-
-func copyToClipboard(s string) error {
-	cmd := exec.Command("pbcopy")
-	cmd.Stdin = strings.NewReader(s)
-	return cmd.Run()
-}
-
-func openBrowser(url string) error {
-	return exec.Command("open", url).Start()
 }
