@@ -75,8 +75,8 @@ func (c *Client) workItemIDs(includeClosed bool) ([]int, error) {
 			ID int `json:"id"`
 		} `json:"workItems"`
 	}
-	endpoint := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/wit/wiql?api-version=%s",
-		url.PathEscape(c.Org), url.PathEscape(c.Project), APIVersion)
+	endpoint := fmt.Sprintf("%s/%s/%s/_apis/wit/wiql?api-version=%s",
+		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project), APIVersion)
 	if err := c.post(endpoint, map[string]string{"query": query}, &resp); err != nil {
 		return nil, err
 	}
@@ -154,8 +154,8 @@ func (c *Client) batch(ids []int) ([]WorkItem, error) {
 		} `json:"value"`
 	}
 
-	endpoint := fmt.Sprintf("https://dev.azure.com/%s/_apis/wit/workitemsbatch?api-version=%s",
-		url.PathEscape(c.Org), APIVersion)
+	endpoint := fmt.Sprintf("%s/%s/_apis/wit/workitemsbatch?api-version=%s",
+		c.root(), url.PathEscape(c.Org), APIVersion)
 	if err := c.post(endpoint, body, &resp); err != nil {
 		return nil, err
 	}
