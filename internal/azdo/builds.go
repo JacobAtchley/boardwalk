@@ -283,7 +283,10 @@ type LogChunk struct {
 type LogCursor map[int]int
 
 // LogLines fetches one build log from startLine onward. The endpoint answers
-// plain text, so this is the one call that does not decode JSON.
+// plain text, so this is the one call that does not decode JSON. The startLine
+// parameter is treated as 0-based: the number of lines already consumed. The
+// Azure DevOps API reference does not state the base; a 1-based base would
+// re-show one line per poll.
 func (c *Client) LogLines(buildID, logID, startLine int) ([]string, error) {
 	endpoint := fmt.Sprintf(
 		"%s/%s/%s/_apis/build/builds/%d/logs/%d?startLine=%d&api-version=%s",

@@ -304,3 +304,35 @@ func TestNewLogChunksSkipsALogWithNothingNew(t *testing.T) {
 		t.Errorf("chunks = %+v, want none when the log has not grown", chunks)
 	}
 }
+
+func TestNewLogChunksReturnsWhatItGatheredBeforeAnError(t *testing.T) {
+	// A failing poll partway through must not discard the output already
+	// read — the log pane shows what it got and reports the failure.
+	var calls int
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls > 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"message":"log unavailable"}`))
+			return
+		}
+		w.Write([]byte("one\ntwo\n"))
+	})
+
+	records := []Record{
+		{Name: "Restore", Type: "Task", Order: 1, LogID: 6},
+		{Name: "Build", Type: "Task", Order: 2, LogID: 7},
+	}
+	cursor := LogCursor{}
+
+	chunks, err := c.NewLogChunks(9001, records, cursor)
+	if err == nil {
+		t.Fatal("NewLogChunks past a failing log returned no error")
+	}
+	if len(chunks) != 1 || chunks[0].Task != "Restore" {
+		t.Errorf("chunks = %+v, want the one gathered before the failure", chunks)
+	}
+	if cursor[7] != 0 {
+		t.Errorf("cursor[7] = %d, want it unadvanced for the log that failed", cursor[7])
+	}
+}
