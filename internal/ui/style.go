@@ -78,6 +78,16 @@ func orDash(s string) string {
 	return s
 }
 
+// padRight pads to a display width, measuring with lipgloss so ANSI styling does
+// not count. A styled cell cannot go through %-Ns: the escape bytes would eat
+// the padding.
+func padRight(s string, width int) string {
+	if gap := width - lipgloss.Width(s); gap > 0 {
+		return s + strings.Repeat(" ", gap)
+	}
+	return s
+}
+
 // statusGlyph pairs a build status with a coloured marker, so the state reads
 // at a glance without the word taking a column of its own.
 func statusGlyph(s azdo.BuildStatus) string {
