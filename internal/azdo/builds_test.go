@@ -86,6 +86,25 @@ func TestSummarizeFailedBuildNamesTheFailingStep(t *testing.T) {
 	}
 }
 
+func TestSummarizeCountsOnlyTaskErrors(t *testing.T) {
+	// Azure DevOps cascades a failed task's result up to the job and stage
+	// containing it, so counting every failed record would report one broken
+	// task three times.
+	records := []Record{
+		{Name: "CI", Type: "Stage", State: "completed", Result: "failed", Order: 1},
+		{Name: "Build job", Type: "Job", State: "completed", Result: "failed", Order: 1},
+		{Name: "Test", Type: "Task", State: "completed", Result: "failed", Order: 2, ErrorCount: 2},
+	}
+
+	got := summarize(records, StatusFailed)
+	if got.Errors != 2 {
+		t.Errorf("errors = %d, want 2 — the job and stage inherit the task's failure", got.Errors)
+	}
+	if got.CurrentStep != "Test" {
+		t.Errorf("current step = %q, want Test", got.CurrentStep)
+	}
+}
+
 func TestSummarizeCleanBuildHasNoCurrentStep(t *testing.T) {
 	records := []Record{
 		{Name: "Build", Type: "Task", State: "completed", Result: "succeeded", Order: 1},

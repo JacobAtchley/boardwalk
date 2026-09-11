@@ -12,14 +12,21 @@ import (
 type BuildStatus int
 
 const (
+	// StatusQueued means the build has not yet started.
 	StatusQueued BuildStatus = iota
+	// StatusRunning means the build is in progress.
 	StatusRunning
+	// StatusSucceeded means the build completed successfully.
 	StatusSucceeded
+	// StatusFailed means the build completed with failures.
 	StatusFailed
+	// StatusPartial means the build partially succeeded.
 	StatusPartial
+	// StatusCanceled means the build was canceled.
 	StatusCanceled
 )
 
+// String reports the human-readable name of the build status.
 func (s BuildStatus) String() string {
 	switch s {
 	case StatusRunning:
@@ -102,6 +109,14 @@ func summarize(records []Record, s BuildStatus) Progress {
 
 	for i := range records {
 		r := records[i]
+
+		// Stages and jobs are containers, and naming one says less than naming
+		// the task inside it. Azure DevOps cascades a failed task's result up
+		// the container hierarchy, so only count task failures.
+		if r.Type != "Task" {
+			continue
+		}
+
 		if r.Result == "failed" {
 			if r.ErrorCount > 0 {
 				p.Errors += r.ErrorCount
@@ -109,12 +124,6 @@ func summarize(records []Record, s BuildStatus) Progress {
 				// A task can fail without filling in a count.
 				p.Errors++
 			}
-		}
-
-		// Stages and jobs are containers, and naming one says less than naming
-		// the task inside it.
-		if r.Type != "Task" {
-			continue
 		}
 		if !worthNaming(r, s) {
 			continue
