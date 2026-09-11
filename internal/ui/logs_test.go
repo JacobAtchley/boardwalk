@@ -1,0 +1,121 @@
+package ui
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+func newLogs(t *testing.T, status azdo.BuildStatus) *Logs {
+	t.Helper()
+	c := &azdo.Client{Org: "acme", Project: "Platform"}
+	build := azdo.Build{ID: 9001, Number: "20260911.3", Pipeline: "platform-ci", Status: status}
+	m := NewLogs(c, build, []azdo.Record{{Name: "Build", Type: "Task", Order: 1, LogID: 7}})
+	m.Body(120, 20)
+	return m
+}
+
+func TestLogsRendersChunksWithTaskRules(t *testing.T) {
+	m := newLogs(t, azdo.StatusSucceeded)
+
+	updated, _ := m.Update(logChunksMsg{
+		Status: azdo.StatusSucceeded,
+		Chunks: []azdo.LogChunk{
+			{Task: "Restore", LogID: 6, Lines: []string{"restoring"}},
+			{Task: "Build", LogID: 7, Lines: []string{"compiling", "done"}},
+		},
+	})
+	m = updated.(*Logs)
+
+	view := m.Body(120, 20)
+	for _, want := range []string{"Restore", "restoring", "Build", "compiling", "done"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view is missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestLogsAppendsWithoutRepeatingTheRule(t *testing.T) {
+	m := newLogs(t, azdo.StatusRunning)
+
+	updated, _ := m.Update(logChunksMsg{Status: azdo.StatusRunning,
+		Chunks: []azdo.LogChunk{{Task: "Build", LogID: 7, Lines: []string{"first"}}}})
+	m = updated.(*Logs)
+	updated, _ = m.Update(logChunksMsg{Status: azdo.StatusRunning,
+		Chunks: []azdo.LogChunk{{Task: "Build", LogID: 7, Lines: []string{"second"}}}})
+	m = updated.(*Logs)
+
+	view := m.Body(120, 40)
+	if strings.Count(view, "── Build ──") != 1 {
+		t.Errorf("the task rule was repeated on an append:\n%s", view)
+	}
+	if !strings.Contains(view, "first") || !strings.Contains(view, "second") {
+		t.Errorf("appended lines are missing:\n%s", view)
+	}
+}
+
+func TestLogsKeepsTailingWhileTheBuildRuns(t *testing.T) {
+	m := newLogs(t, azdo.StatusRunning)
+
+	_, cmd := m.Update(logChunksMsg{Status: azdo.StatusRunning})
+	if cmd == nil {
+		t.Fatal("a running build did not schedule another poll")
+	}
+}
+
+func TestLogsStopsTailingWhenTheBuildFinishes(t *testing.T) {
+	m := newLogs(t, azdo.StatusRunning)
+
+	updated, cmd := m.Update(logChunksMsg{Status: azdo.StatusSucceeded})
+	m = updated.(*Logs)
+
+	if cmd != nil {
+		t.Error("a finished build scheduled another poll")
+	}
+	if !strings.Contains(m.Title(), "succeeded") {
+		t.Errorf("title = %q, want the final status", m.Title())
+	}
+	if !strings.Contains(m.Hints(), "r refresh") {
+		t.Errorf("hints = %q, want refresh offered once tailing stops", m.Hints())
+	}
+}
+
+func TestLogsTickFetches(t *testing.T) {
+	m := newLogs(t, azdo.StatusRunning)
+
+	_, cmd := m.Update(tailTickMsg{})
+	if cmd == nil {
+		t.Error("a tick did not fetch")
+	}
+}
+
+func TestLogsEscapePops(t *testing.T) {
+	m := newLogs(t, azdo.StatusSucceeded)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("escape produced no command")
+	}
+	if _, ok := cmd().(PopMsg); !ok {
+		t.Errorf("escape produced %T, want a PopMsg", cmd())
+	}
+}
+
+func TestLogsErrorIsReportedWithoutLosingTheText(t *testing.T) {
+	m := newLogs(t, azdo.StatusRunning)
+
+	updated, _ := m.Update(logChunksMsg{Status: azdo.StatusRunning,
+		Chunks: []azdo.LogChunk{{Task: "Build", LogID: 7, Lines: []string{"compiling"}}}})
+	m = updated.(*Logs)
+	updated, _ = m.Update(logChunksMsg{Err: errTest})
+	m = updated.(*Logs)
+
+	if _, isErr := m.Status(); !isErr {
+		t.Error("a log fetch failure was not reported")
+	}
+	if !strings.Contains(m.Body(120, 20), "compiling") {
+		t.Error("the log text was lost when a poll failed")
+	}
+}
