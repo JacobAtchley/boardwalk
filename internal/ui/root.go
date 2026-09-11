@@ -135,9 +135,37 @@ func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, nil
 	}
 
-	updated, cmd := top.Update(msg)
-	r.stack[len(r.stack)-1] = updated
-	return r, cmd
+	if topOnly(msg) {
+		updated, cmd := top.Update(msg)
+		r.stack[len(r.stack)-1] = updated
+		return r, cmd
+	}
+
+	// Everything else is data, and data goes to every view in the stack. A
+	// fetch a view started before the user drilled into something resolves
+	// while that view is no longer on top: delivering it to the top alone
+	// dropped it, and the view that asked for it kept its in-flight guard set
+	// forever. The views already key their own messages by id and ignore
+	// types that are not theirs, so a broadcast reaches exactly one of them.
+	var cmds []tea.Cmd
+	for i, v := range r.stack {
+		updated, cmd := v.Update(msg)
+		r.stack[i] = updated
+		cmds = append(cmds, cmd)
+	}
+	return r, tea.Batch(cmds...)
+}
+
+// topOnly reports whether a message belongs to the view the user is looking at
+// and to no other. Keys must not be acted on by a hidden view, and the status
+// line is chrome Root renders once — a hidden view setting it would describe
+// something that is not on screen.
+func topOnly(msg tea.Msg) bool {
+	switch msg.(type) {
+	case tea.KeyMsg, StatusMsg, ErrMsg:
+		return true
+	}
+	return false
 }
 
 // key handles the bindings Root owns. Everything else falls through to the view

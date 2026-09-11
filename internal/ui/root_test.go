@@ -252,3 +252,81 @@ func mustItems(t *testing.T) []azdo.WorkItem {
 	_, items := fixture()
 	return items
 }
+
+func TestRootDeliversDataToAViewThatIsNotOnTop(t *testing.T) {
+	// Builds fetches its timelines the instant the list lands, and enter is the
+	// next thing a user does. Routing every message to the top of the stack
+	// alone dropped the timeline on the log pane, leaving the build's in-flight
+	// guard set forever and its step and error columns reading "…" for good.
+	c, builds := buildFixture()
+	r := NewRoot(c, false, false, "builds")
+	updated, _ := r.Update(tea.WindowSizeMsg{Width: 160, Height: 30})
+	r = updated.(*Root)
+
+	// The batch landing sets the in-flight guard for every eager row.
+	updated, _ = r.Update(buildsMsg{Builds: builds})
+	r = updated.(*Root)
+
+	updated, cmd := r.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	r = updated.(*Root)
+	if cmd == nil {
+		t.Fatal("enter on a build produced no command")
+	}
+	push, ok := cmd().(PushMsg)
+	if !ok {
+		t.Fatalf("enter produced %T, want a PushMsg", cmd())
+	}
+	updated, _ = r.Update(push)
+	r = updated.(*Root)
+	if !strings.Contains(r.View(), "platform-ci #20260911.3") {
+		t.Fatalf("the log pane is not on top:\n%s", r.View())
+	}
+
+	updated, _ = r.Update(timelineMsg{
+		Build:    9001,
+		Progress: azdo.Progress{CurrentStep: "Run tests"},
+		Records:  []azdo.Record{{Name: "Run tests", Type: "Task", State: "inProgress", Order: 1, LogID: 7}},
+	})
+	r = updated.(*Root)
+
+	// q from a drill-down goes back rather than quitting.
+	updated, cmd = r.Update(runes("q"))
+	r = updated.(*Root)
+	if cmd != nil {
+		if _, quit := cmd().(tea.QuitMsg); quit {
+			t.Error("q from a drill-down quit the program instead of going back")
+		}
+	}
+
+	view := r.View()
+	if !strings.Contains(view, "builds (2)") {
+		t.Fatalf("q did not return to the build list:\n%s", view)
+	}
+	if !strings.Contains(view, "Run tests") {
+		t.Errorf("the timeline never reached the build list, which was not on top when it landed:\n%s", view)
+	}
+}
+
+func TestRootKeepsTheStatusLineForTheViewOnTop(t *testing.T) {
+	// A hidden view must not write the status line: the user would read it as
+	// describing whatever is actually on screen.
+	c, builds := buildFixture()
+	r := NewRoot(c, false, false, "builds")
+	updated, _ := r.Update(tea.WindowSizeMsg{Width: 160, Height: 30})
+	r = updated.(*Root)
+	updated, _ = r.Update(buildsMsg{Builds: builds})
+	r = updated.(*Root)
+
+	logs := NewLogs(c, buildStub(), nil)
+	updated, _ = r.Update(PushMsg{View: logs})
+	r = updated.(*Root)
+
+	updated, _ = r.Update(StatusMsg{Text: "a status for the top view"})
+	r = updated.(*Root)
+	updated, _ = r.Update(PopMsg{})
+	r = updated.(*Root)
+
+	if status, _ := r.stack[0].Status(); status != "" {
+		t.Errorf("a hidden view took the status line: %q", status)
+	}
+}
