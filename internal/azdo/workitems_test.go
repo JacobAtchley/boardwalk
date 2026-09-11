@@ -1,7 +1,10 @@
 package azdo
 
 import (
+	"io"
+	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -67,5 +70,28 @@ func TestMineOf(t *testing.T) {
 	// unassigned items whose key is also empty.
 	if got := MineOf(items, ""); got != nil {
 		t.Errorf("MineOf with no identity = %v, want nil", got)
+	}
+}
+
+func TestBatchFieldsIncludeAcceptanceCriteria(t *testing.T) {
+	var body string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		body = string(buf)
+		w.Write([]byte(`{"value":[{"id":4021,"fields":{
+			"System.Title":"Retry webhooks",
+			"Microsoft.VSTS.Common.AcceptanceCriteria":"<ul><li>Retries three times</li></ul>"
+		}}]}`))
+	})
+
+	items, err := c.batch([]int{4021})
+	if err != nil {
+		t.Fatalf("batch returned %v", err)
+	}
+	if !strings.Contains(body, "Microsoft.VSTS.Common.AcceptanceCriteria") {
+		t.Error("the batch request did not ask for acceptance criteria")
+	}
+	if items[0].AcceptanceCriteria != "Retries three times" {
+		t.Errorf("acceptance criteria = %q, want the HTML stripped", items[0].AcceptanceCriteria)
 	}
 }

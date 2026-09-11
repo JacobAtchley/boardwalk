@@ -16,15 +16,16 @@ const batchSize = 200
 const batchConcurrency = 8
 
 type WorkItem struct {
-	ID          int
-	Title       string
-	Type        string
-	State       string
-	Assigned    string
-	AssignedKey string // uniqueName, lowercased, compared against Client.Me
-	Tags        string
-	Iteration   string
-	Description string
+	ID                 int
+	Title              string
+	Type               string
+	State              string
+	Assigned           string
+	AssignedKey        string // uniqueName, lowercased, compared against Client.Me
+	Tags               string
+	Iteration          string
+	Description        string
+	AcceptanceCriteria string
 }
 
 // MineOf returns the subset assigned to the signed-in user.
@@ -133,6 +134,7 @@ func (c *Client) batch(ids []int) ([]WorkItem, error) {
 		"fields": []string{
 			"System.Id", "System.Title", "System.WorkItemType", "System.State",
 			"System.AssignedTo", "System.Tags", "System.IterationPath", "System.Description",
+			"Microsoft.VSTS.Common.AcceptanceCriteria",
 		},
 	}
 
@@ -140,13 +142,14 @@ func (c *Client) batch(ids []int) ([]WorkItem, error) {
 		Value []struct {
 			ID     int `json:"id"`
 			Fields struct {
-				Title       string `json:"System.Title"`
-				Type        string `json:"System.WorkItemType"`
-				State       string `json:"System.State"`
-				Tags        string `json:"System.Tags"`
-				Iteration   string `json:"System.IterationPath"`
-				Description string `json:"System.Description"`
-				AssignedTo  *struct {
+				Title              string `json:"System.Title"`
+				Type               string `json:"System.WorkItemType"`
+				State              string `json:"System.State"`
+				Tags               string `json:"System.Tags"`
+				Iteration          string `json:"System.IterationPath"`
+				Description        string `json:"System.Description"`
+				AcceptanceCriteria string `json:"Microsoft.VSTS.Common.AcceptanceCriteria"`
+				AssignedTo         *struct {
 					DisplayName string `json:"displayName"`
 					UniqueName  string `json:"uniqueName"`
 				} `json:"System.AssignedTo"`
@@ -163,14 +166,15 @@ func (c *Client) batch(ids []int) ([]WorkItem, error) {
 	items := make([]WorkItem, 0, len(resp.Value))
 	for _, v := range resp.Value {
 		item := WorkItem{
-			ID:          v.ID,
-			Title:       v.Fields.Title,
-			Type:        v.Fields.Type,
-			State:       v.Fields.State,
-			Tags:        v.Fields.Tags,
-			Iteration:   v.Fields.Iteration,
-			Description: StripHTML(v.Fields.Description),
-			Assigned:    "(unassigned)",
+			ID:                 v.ID,
+			Title:              v.Fields.Title,
+			Type:               v.Fields.Type,
+			State:              v.Fields.State,
+			Tags:               v.Fields.Tags,
+			Iteration:          v.Fields.Iteration,
+			Description:        StripHTML(v.Fields.Description),
+			AcceptanceCriteria: StripHTML(v.Fields.AcceptanceCriteria),
+			Assigned:           "(unassigned)",
 		}
 		if v.Fields.AssignedTo != nil {
 			item.Assigned = v.Fields.AssignedTo.DisplayName
