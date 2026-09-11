@@ -1,0 +1,261 @@
+package azdo
+
+import (
+	"fmt"
+	"net/url"
+	"sort"
+	"time"
+)
+
+// BuildStatus collapses Azure DevOps's status and result pair into the single
+// value a list column can show.
+type BuildStatus int
+
+const (
+	StatusQueued BuildStatus = iota
+	StatusRunning
+	StatusSucceeded
+	StatusFailed
+	StatusPartial
+	StatusCanceled
+)
+
+func (s BuildStatus) String() string {
+	switch s {
+	case StatusRunning:
+		return "running"
+	case StatusSucceeded:
+		return "succeeded"
+	case StatusFailed:
+		return "failed"
+	case StatusPartial:
+		return "partial"
+	case StatusCanceled:
+		return "canceled"
+	default:
+		return "queued"
+	}
+}
+
+// Done reports whether the build has stopped changing, which is what tells the
+// log pane to stop polling.
+func (s BuildStatus) Done() bool {
+	return s != StatusQueued && s != StatusRunning
+}
+
+// classify folds the API's two fields into one. A completed build with no
+// result is treated as failed rather than as a success nobody recorded.
+func classify(status, result string) BuildStatus {
+	switch status {
+	case "inProgress", "cancelling":
+		return StatusRunning
+	case "completed":
+		switch result {
+		case "succeeded":
+			return StatusSucceeded
+		case "partiallySucceeded":
+			return StatusPartial
+		case "canceled":
+			return StatusCanceled
+		default:
+			return StatusFailed
+		}
+	default:
+		return StatusQueued
+	}
+}
+
+// Build is one pipeline run.
+type Build struct {
+	ID           int
+	Number       string
+	Pipeline     string
+	RequestedFor string
+	SourceBranch string
+	Status       BuildStatus
+	Queued       time.Time
+}
+
+// Record is one entry in a build's timeline: a stage, a job, or a task.
+type Record struct {
+	Name       string
+	Type       string
+	State      string
+	Result     string
+	Order      int
+	LogID      int
+	ErrorCount int
+}
+
+// Progress is what the build list shows beyond the status glyph.
+type Progress struct {
+	CurrentStep string
+	Errors      int
+}
+
+// summarize picks the step worth naming and totals the errors. For a running
+// build that is whatever is executing; for a failed one it is what broke; for a
+// build that finished clean there is nothing to say.
+func summarize(records []Record, s BuildStatus) Progress {
+	var p Progress
+	var current *Record
+
+	for i := range records {
+		r := records[i]
+		if r.Result == "failed" {
+			if r.ErrorCount > 0 {
+				p.Errors += r.ErrorCount
+			} else {
+				// A task can fail without filling in a count.
+				p.Errors++
+			}
+		}
+
+		// Stages and jobs are containers, and naming one says less than naming
+		// the task inside it.
+		if r.Type != "Task" {
+			continue
+		}
+		if !worthNaming(r, s) {
+			continue
+		}
+		// Two tasks can be in flight at once, and the timeline is unordered, so
+		// the earliest is the one to name.
+		if current == nil || r.Order < current.Order {
+			current = &records[i]
+		}
+	}
+
+	if current != nil {
+		p.CurrentStep = current.Name
+	}
+	return p
+}
+
+// worthNaming reports whether a task is the one the list should point at: what
+// is executing on a running build, what broke on a failed one, and nothing at
+// all on a build that finished clean.
+func worthNaming(r Record, s BuildStatus) bool {
+	if !s.Done() {
+		return s == StatusRunning && r.State == "inProgress"
+	}
+	if s == StatusSucceeded {
+		return false
+	}
+	return r.Result == "failed"
+}
+
+// Builds lists the project's most recent pipeline runs, newest first.
+func (c *Client) Builds(top int) ([]Build, error) {
+	var resp struct {
+		Value []buildJSON `json:"value"`
+	}
+
+	endpoint := fmt.Sprintf(
+		"%s/%s/%s/_apis/build/builds?$top=%d&queryOrder=queueTimeDescending&api-version=%s",
+		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project), top, APIVersion)
+	if err := c.get(endpoint, &resp); err != nil {
+		return nil, err
+	}
+
+	builds := make([]Build, 0, len(resp.Value))
+	for _, v := range resp.Value {
+		builds = append(builds, v.build())
+	}
+	return builds, nil
+}
+
+// BuildByID refetches one build, which is how the log pane notices that the
+// run it is tailing has finished.
+func (c *Client) BuildByID(id int) (Build, error) {
+	var v buildJSON
+	endpoint := fmt.Sprintf("%s/%s/%s/_apis/build/builds/%d?api-version=%s",
+		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project), id, APIVersion)
+	if err := c.get(endpoint, &v); err != nil {
+		return Build{}, err
+	}
+	return v.build(), nil
+}
+
+type buildJSON struct {
+	ID           int       `json:"id"`
+	Number       string    `json:"buildNumber"`
+	Status       string    `json:"status"`
+	Result       string    `json:"result"`
+	Queued       time.Time `json:"queueTime"`
+	SourceBranch string    `json:"sourceBranch"`
+	Definition   struct {
+		Name string `json:"name"`
+	} `json:"definition"`
+	RequestedFor struct {
+		DisplayName string `json:"displayName"`
+	} `json:"requestedFor"`
+}
+
+func (v buildJSON) build() Build {
+	return Build{
+		ID:           v.ID,
+		Number:       v.Number,
+		Pipeline:     v.Definition.Name,
+		RequestedFor: v.RequestedFor.DisplayName,
+		SourceBranch: v.SourceBranch,
+		Status:       classify(v.Status, v.Result),
+		Queued:       v.Queued,
+	}
+}
+
+// Timeline returns a build's progress summary and its records in execution
+// order. The records carry the log ids the log pane concatenates.
+func (c *Client) Timeline(buildID int) (Progress, []Record, error) {
+	var resp struct {
+		Records []struct {
+			Name       string `json:"name"`
+			Type       string `json:"type"`
+			State      string `json:"state"`
+			Result     string `json:"result"`
+			Order      int    `json:"order"`
+			ErrorCount int    `json:"errorCount"`
+			Log        *struct {
+				ID int `json:"id"`
+			} `json:"log"`
+		} `json:"records"`
+	}
+
+	endpoint := fmt.Sprintf("%s/%s/%s/_apis/build/builds/%d/timeline?api-version=%s",
+		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project), buildID, APIVersion)
+	if err := c.get(endpoint, &resp); err != nil {
+		return Progress{}, nil, err
+	}
+
+	records := make([]Record, 0, len(resp.Records))
+	for _, v := range resp.Records {
+		r := Record{
+			Name:       v.Name,
+			Type:       v.Type,
+			State:      v.State,
+			Result:     v.Result,
+			Order:      v.Order,
+			ErrorCount: v.ErrorCount,
+		}
+		if v.Log != nil {
+			r.LogID = v.Log.ID
+		}
+		records = append(records, r)
+	}
+
+	// The timeline arrives in no particular order, and both the current-step
+	// pick and the log concatenation depend on execution order.
+	sort.SliceStable(records, func(i, j int) bool { return records[i].Order < records[j].Order })
+
+	build, err := c.BuildByID(buildID)
+	if err != nil {
+		return Progress{}, records, err
+	}
+	return summarize(records, build.Status), records, nil
+}
+
+// BuildURL is the browser URL for a build's results page.
+func (c *Client) BuildURL(id int) string {
+	return fmt.Sprintf("%s/%s/%s/_build/results?buildId=%d",
+		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project), id)
+}
