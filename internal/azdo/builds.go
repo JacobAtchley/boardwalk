@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -267,4 +268,64 @@ func (c *Client) Timeline(buildID int) (Progress, []Record, error) {
 func (c *Client) BuildURL(id int) string {
 	return fmt.Sprintf("%s/%s/%s/_build/results?buildId=%d",
 		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project), id)
+}
+
+// LogChunk is one task's log text, or the part of it that has not been shown
+// yet.
+type LogChunk struct {
+	Task  string
+	LogID int
+	Lines []string
+}
+
+// LogCursor remembers how many lines of each log have already been consumed, so
+// tailing a running build re-reads nothing.
+type LogCursor map[int]int
+
+// LogLines fetches one build log from startLine onward. The endpoint answers
+// plain text, so this is the one call that does not decode JSON.
+func (c *Client) LogLines(buildID, logID, startLine int) ([]string, error) {
+	endpoint := fmt.Sprintf(
+		"%s/%s/%s/_apis/build/builds/%d/logs/%d?startLine=%d&api-version=%s",
+		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project),
+		buildID, logID, startLine, APIVersion)
+
+	body, err := c.getText(endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	body = strings.TrimRight(body, "\n")
+	if body == "" {
+		return nil, nil
+	}
+	return strings.Split(body, "\n"), nil
+}
+
+// NewLogChunks returns whatever each task's log has gained since the cursor was
+// last advanced, in execution order, and advances the cursor. Calling it on a
+// fresh cursor reads the whole build; calling it again while the build runs
+// reads only the tail.
+func (c *Client) NewLogChunks(buildID int, records []Record, cursor LogCursor) ([]LogChunk, error) {
+	var chunks []LogChunk
+
+	for _, r := range records {
+		// Stages and jobs have no log of their own, and a task that has not
+		// started yet has no log id.
+		if r.Type != "Task" || r.LogID == 0 {
+			continue
+		}
+
+		lines, err := c.LogLines(buildID, r.LogID, cursor[r.LogID])
+		if err != nil {
+			return chunks, err
+		}
+		if len(lines) == 0 {
+			continue
+		}
+
+		cursor[r.LogID] += len(lines)
+		chunks = append(chunks, LogChunk{Task: r.Name, LogID: r.LogID, Lines: lines})
+	}
+	return chunks, nil
 }

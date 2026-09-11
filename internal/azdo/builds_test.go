@@ -217,3 +217,90 @@ func containsPath(path, substr string) bool {
 	}
 	return false
 }
+
+func TestLogLinesSplitsTheBodyAndPassesStartLine(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("startLine"); got != "3" {
+			t.Errorf("startLine = %q, want 3", got)
+		}
+		w.Write([]byte("third\nfourth\n"))
+	})
+
+	lines, err := c.LogLines(9001, 7, 3)
+	if err != nil {
+		t.Fatalf("LogLines returned %v", err)
+	}
+	if len(lines) != 2 || lines[0] != "third" || lines[1] != "fourth" {
+		t.Errorf("lines = %q, want the two lines without the trailing blank", lines)
+	}
+}
+
+func TestLogLinesOnAnEmptyLog(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {})
+
+	lines, err := c.LogLines(9001, 7, 0)
+	if err != nil {
+		t.Fatalf("LogLines returned %v", err)
+	}
+	if len(lines) != 0 {
+		t.Errorf("lines = %q, want none", lines)
+	}
+}
+
+func TestNewLogChunksReadsEachTaskOnceAndAdvancesTheCursor(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("startLine") {
+		case "", "0":
+			w.Write([]byte("one\ntwo\n"))
+		default:
+			w.Write([]byte("three\n"))
+		}
+	})
+
+	records := []Record{
+		{Name: "Restore", Type: "Task", Order: 1, LogID: 6},
+		{Name: "Build", Type: "Task", Order: 2, LogID: 7},
+		{Name: "Job", Type: "Job", Order: 1},      // no log of its own
+		{Name: "Pending", Type: "Task", Order: 3}, // not started, LogID zero
+	}
+	cursor := LogCursor{}
+
+	chunks, err := c.NewLogChunks(9001, records, cursor)
+	if err != nil {
+		t.Fatalf("NewLogChunks returned %v", err)
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("got %d chunks, want 2 — only tasks with a log id", len(chunks))
+	}
+	if chunks[0].Task != "Restore" || len(chunks[0].Lines) != 2 {
+		t.Errorf("first chunk = %+v", chunks[0])
+	}
+	if cursor[6] != 2 || cursor[7] != 2 {
+		t.Errorf("cursor = %v, want each log advanced to 2", cursor)
+	}
+
+	// A second pass must return only what has been appended since.
+	again, err := c.NewLogChunks(9001, records, cursor)
+	if err != nil {
+		t.Fatalf("second NewLogChunks returned %v", err)
+	}
+	if len(again) != 2 || len(again[0].Lines) != 1 || again[0].Lines[0] != "three" {
+		t.Errorf("second pass = %+v, want one new line per log", again)
+	}
+	if cursor[6] != 3 {
+		t.Errorf("cursor = %v, want 3 after the second pass", cursor)
+	}
+}
+
+func TestNewLogChunksSkipsALogWithNothingNew(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {})
+
+	records := []Record{{Name: "Build", Type: "Task", Order: 1, LogID: 7}}
+	chunks, err := c.NewLogChunks(9001, records, LogCursor{7: 10})
+	if err != nil {
+		t.Fatalf("NewLogChunks returned %v", err)
+	}
+	if len(chunks) != 0 {
+		t.Errorf("chunks = %+v, want none when the log has not grown", chunks)
+	}
+}
