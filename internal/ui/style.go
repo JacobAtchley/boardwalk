@@ -5,6 +5,7 @@ import (
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 var (
@@ -39,15 +40,19 @@ var (
 
 // truncate cuts a string to width display columns, marking the cut with an
 // ellipsis. Width is measured with lipgloss so ANSI styling does not count.
+//
+// The cut goes through ansi rather than slicing runes for the same reason the
+// measurement does: a row cell can be styled — buildRow.Render pushes a
+// composite holding a coloured status glyph and a red error count through
+// here. Slicing runes counted the escape bytes as columns, so a styled row lost
+// content at ordinary widths, and at some widths the cut landed between a
+// colour and its reset (bleeding the colour onto the rest of the line) or
+// inside the escape sequence itself.
 func truncate(s string, width int) string {
 	if width <= 1 || lipgloss.Width(s) <= width {
 		return s
 	}
-	runes := []rune(s)
-	if len(runes) <= width {
-		return s
-	}
-	return string(runes[:width-1]) + "…"
+	return ansi.Truncate(s, width, "…")
 }
 
 // wordwrap breaks text on word boundaries at the given width.
@@ -78,14 +83,16 @@ func orDash(s string) string {
 	return s
 }
 
-// padRight pads to a display width, measuring with lipgloss so ANSI styling does
-// not count. A styled cell cannot go through %-Ns: the escape bytes would eat
-// the padding.
+// padRight fits a cell to a display width, measuring with lipgloss so ANSI
+// styling does not count. A styled cell cannot go through %-Ns: the escape
+// bytes would eat the padding. An oversize cell is cut rather than allowed
+// through, since one long cell pushing every column after it out of alignment
+// defeats the point of padding the short ones.
 func padRight(s string, width int) string {
 	if gap := width - lipgloss.Width(s); gap > 0 {
 		return s + strings.Repeat(" ", gap)
 	}
-	return s
+	return truncate(s, width)
 }
 
 // shade picks the nth colour of a gradient, holding the last one for any row
