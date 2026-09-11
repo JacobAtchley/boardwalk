@@ -66,10 +66,17 @@ func (c *Client) RefHead(repoID, ref string) (string, error) {
 	if err := c.get(endpoint, &resp); err != nil {
 		return "", err
 	}
-	if len(resp.Value) == 0 {
-		return "", fmt.Errorf("no ref matching %s", ref)
+	// The endpoint's filter is a starts-with match, so filter=heads/main also
+	// returns refs/heads/main-2 and refs/heads/main-hotfix, in unspecified
+	// order. Taking the first entry back would branch off whichever ref the
+	// server happened to list first — the right name is the only way to know
+	// which ref this is.
+	for _, v := range resp.Value {
+		if v.Name == ref {
+			return v.ObjectID, nil
+		}
 	}
-	return resp.Value[0].ObjectID, nil
+	return "", fmt.Errorf("no ref matching %s", ref)
 }
 
 // CreateBranch creates refs/heads/<branch> pointing at fromSHA. branch is the
