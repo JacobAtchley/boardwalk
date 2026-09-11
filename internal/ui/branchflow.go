@@ -9,11 +9,16 @@ import (
 
 // BranchResult is what the branch flow did. Steps names everything that
 // succeeded, so a failure halfway through still reports the work that landed
-// rather than reading as a clean failure.
+// rather than reading as a clean failure. Activated is set structurally,
+// alongside the "set #%d Active" step, rather than recovered by matching that
+// step's text — so the row can be synced to the server even when the flow
+// fails on the link step afterward.
 type BranchResult struct {
-	Branch string
-	Steps  []string
-	Err    error
+	Branch    string
+	ID        int
+	Steps     []string
+	Activated bool
+	Err       error
 }
 
 type branchDoneMsg struct{ BranchResult }
@@ -42,7 +47,7 @@ func pickRepo(repos []azdo.Repo, want string) (azdo.Repo, bool) {
 // the branch to it. Each step is recorded before the next runs, so a later
 // failure does not erase what already happened.
 func runBranchFlow(c *azdo.Client, id int, branch string, repo azdo.Repo) BranchResult {
-	res := BranchResult{Branch: branch}
+	res := BranchResult{Branch: branch, ID: id}
 
 	head, err := c.RefHead(repo.ID, repo.DefaultBranch)
 	if err != nil {
@@ -61,6 +66,7 @@ func runBranchFlow(c *azdo.Client, id int, branch string, repo azdo.Repo) Branch
 		return res
 	}
 	res.Steps = append(res.Steps, fmt.Sprintf("set #%d Active", id))
+	res.Activated = true
 
 	if err := c.LinkBranch(id, repo.ProjectID, repo.ID, branch); err != nil {
 		res.Err = fmt.Errorf("could not link the branch to #%d: %w", id, err)

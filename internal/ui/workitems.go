@@ -175,6 +175,12 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 		return m, nil
 
 	case branchDoneMsg:
+		// The state change is real on the server whenever it landed, even if
+		// a later step (the link) then failed — so the row is synced off the
+		// Activated flag, not off whether the whole flow succeeded.
+		if msg.Activated {
+			m.setRowState(msg.ID, "Active")
+		}
 		if msg.Err != nil {
 			m.failed = true
 			m.status = msg.Err.Error()

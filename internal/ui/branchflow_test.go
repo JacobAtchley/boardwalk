@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -10,6 +11,20 @@ import (
 )
 
 var errTest = errors.New("the server said no")
+
+// rowLine returns the rendered line for a work item id, so a test can check
+// what the list shows for one row without matching on the whole body.
+func rowLine(t *testing.T, m *WorkItems, id int) string {
+	t.Helper()
+	marker := fmt.Sprintf("%d", id)
+	for _, line := range strings.Split(body(t, m), "\n") {
+		if strings.Contains(line, marker) {
+			return line
+		}
+	}
+	t.Fatalf("no row found for #%d", id)
+	return ""
+}
 
 func TestPickRepo(t *testing.T) {
 	repos := []azdo.Repo{
@@ -76,12 +91,16 @@ func TestBranchPromptSwallowsActionKeys(t *testing.T) {
 }
 
 func TestBranchDoneReportsEveryStep(t *testing.T) {
+	// #4020 starts life as "Needs Refinement" in the fixture, so a row
+	// picking up Active is evidence of the sync rather than a coincidence.
 	c, items := fixture()
 	m := sized(t, NewWorkItems(c, items, false), 120, 24)
 
 	updated, cmd := m.Update(branchDoneMsg{BranchResult{
-		Branch: "feature/4021-retry",
-		Steps:  []string{"created feature/4021-retry", "set #4021 Active", "linked the branch"},
+		Branch:    "feature/4020-tidy",
+		ID:        4020,
+		Steps:     []string{"created feature/4020-tidy", "set #4020 Active", "linked the branch"},
+		Activated: true,
 	}})
 	m = updated.(*WorkItems)
 
@@ -97,16 +116,25 @@ func TestBranchDoneReportsEveryStep(t *testing.T) {
 	if cmd == nil {
 		t.Error("a successful flow did not hand a checkout command to the shell")
 	}
+	// The row itself has to show the new state, not just the status line.
+	if !strings.Contains(rowLine(t, m, 4020), "Active") {
+		t.Errorf("row for #4020 did not pick up Active: %q", rowLine(t, m, 4020))
+	}
 }
 
 func TestBranchDoneKeepsTheStepsThatSucceeded(t *testing.T) {
+	// The flow got past creating the branch and setting the state before
+	// failing on the link step. Both of those landed on the server — the
+	// state change included — even though the flow as a whole failed.
 	c, items := fixture()
 	m := sized(t, NewWorkItems(c, items, false), 120, 24)
 
 	updated, cmd := m.Update(branchDoneMsg{BranchResult{
-		Branch: "feature/4021-retry",
-		Steps:  []string{"created feature/4021-retry"},
-		Err:    errTest,
+		Branch:    "feature/4020-tidy",
+		ID:        4020,
+		Steps:     []string{"created feature/4020-tidy", "set #4020 Active"},
+		Activated: true,
+		Err:       errTest,
 	}})
 	m = updated.(*WorkItems)
 
@@ -114,11 +142,35 @@ func TestBranchDoneKeepsTheStepsThatSucceeded(t *testing.T) {
 	if !isErr {
 		t.Error("a partial failure did not report as an error")
 	}
-	if !strings.Contains(status, "created feature/4021-retry") {
+	if !strings.Contains(status, "created feature/4020-tidy") {
 		t.Errorf("status = %q, want the completed step still named", status)
 	}
 	if cmd != nil {
 		t.Error("a failed flow still handed a command to the shell")
+	}
+	// The state change really happened on the server, so the row has to
+	// reflect it even though the flow overall reads as a failure.
+	if !strings.Contains(rowLine(t, m, 4020), "Active") {
+		t.Errorf("row for #4020 did not pick up Active despite the state change landing: %q", rowLine(t, m, 4020))
+	}
+}
+
+func TestBranchDoneLeavesTheRowAloneWhenActivationNeverHappened(t *testing.T) {
+	// The flow failed before the state-change step ran at all — nothing
+	// landed on the server, so the row must not move.
+	c, items := fixture()
+	m := sized(t, NewWorkItems(c, items, false), 120, 24)
+	before := rowLine(t, m, 4020)
+
+	updated, _ := m.Update(branchDoneMsg{BranchResult{
+		Branch: "feature/4020-tidy",
+		ID:     4020,
+		Err:    errTest,
+	}})
+	m = updated.(*WorkItems)
+
+	if got := rowLine(t, m, 4020); got != before {
+		t.Errorf("row for #4020 changed despite the state change never landing: %q, was %q", got, before)
 	}
 }
 
