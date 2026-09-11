@@ -2,6 +2,7 @@ package azdo
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -173,7 +174,7 @@ func TestBuildsParsesTheListing(t *testing.T) {
 func TestTimelineSummarisesAndReturnsRecords(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		// Branch on the request path: timeline vs build endpoint
-		if containsPath(r.URL.Path, "/timeline") {
+		if strings.Contains(r.URL.Path, "/timeline") {
 			w.Write([]byte(`{"records":[
 			 {"name":"Build","type":"Task","state":"inProgress","order":2,"log":{"id":7}},
 			 {"name":"Restore","type":"Task","state":"completed","result":"succeeded","order":1,"log":{"id":6}},
@@ -206,16 +207,6 @@ func TestBuildURL(t *testing.T) {
 	if got := c.BuildURL(9001); got != want {
 		t.Errorf("BuildURL = %q, want %q", got, want)
 	}
-}
-
-// Helper function to check if a URL path contains a substring
-func containsPath(path, substr string) bool {
-	for i := 0; i <= len(path)-len(substr); i++ {
-		if path[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 func TestLogLinesSplitsTheBodyAndPassesStartLine(t *testing.T) {

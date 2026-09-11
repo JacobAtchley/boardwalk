@@ -287,7 +287,7 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 
 		if it, ok := m.selected(); ok {
 			if status, handled := SharedAction(it, msg); handled {
-				m.status, m.failed = status, false
+				m.status, m.failed = status.Text, status.Err
 				return m, nil
 			}
 		}

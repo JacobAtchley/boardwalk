@@ -11,21 +11,41 @@ import (
 // SharedHints is the part of the key line every view has in common.
 const SharedHints = "/ filter · y copy id · s slack · o open · ^u/^d detail"
 
-// SharedAction runs the copy and open actions every view binds. It reports
-// whether it claimed the key, so a view can fall through to its own bindings.
-func SharedAction(r Row, msg tea.KeyMsg) (string, bool) {
+// copyToClipboard and openBrowser are indirected through variables so a test
+// can drive both outcomes without depending on whether the machine has pbcopy
+// and open — and without really opening a browser window while the suite runs.
+var (
+	copyToClipboard = CopyToClipboard
+	openBrowser     = OpenBrowser
+)
+
+// SharedAction runs the copy and open actions every view binds, returning what
+// to put on the status line and whether it claimed the key, so a view can fall
+// through to its own bindings.
+func SharedAction(r Row, msg tea.KeyMsg) (StatusMsg, bool) {
 	switch msg.String() {
 	case "y", "ctrl+y":
-		CopyToClipboard(r.CopyID())
-		return fmt.Sprintf("copied id %s", r.CopyID()), true
+		return report(fmt.Sprintf("copied id %s", r.CopyID()),
+			"could not copy to the clipboard", copyToClipboard(r.CopyID())), true
 	case "s", "ctrl+s":
-		CopyToClipboard(SlackLink(r.Label(), r.URL()))
-		return fmt.Sprintf("copied Slack link for %s", firstToken(r.Label())), true
+		return report(fmt.Sprintf("copied Slack link for %s", firstToken(r.Label())),
+			"could not copy to the clipboard", copyToClipboard(SlackLink(r.Label(), r.URL()))), true
 	case "o", "ctrl+o":
-		OpenBrowser(r.URL())
-		return fmt.Sprintf("opened %s", firstToken(r.Label())), true
+		return report(fmt.Sprintf("opened %s", firstToken(r.Label())),
+			"could not open a browser", openBrowser(r.URL())), true
 	}
-	return "", false
+	return StatusMsg{}, false
+}
+
+// report pairs what an action did with what to say when it did not. pbcopy and
+// open are separate processes that can be missing or refuse, and both calls
+// return an error: without this the status line said "copied id 4021" on a
+// machine where nothing had been copied at all.
+func report(done, failed string, err error) StatusMsg {
+	if err != nil {
+		return StatusMsg{Text: fmt.Sprintf("%s: %v", failed, err), Err: true}
+	}
+	return StatusMsg{Text: done}
 }
 
 // firstToken is the identifier at the head of a row label — "#4021" or "!512" —

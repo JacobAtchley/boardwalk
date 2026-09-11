@@ -201,7 +201,7 @@ func (m *Builds) Update(msg tea.Msg) (View, tea.Cmd) {
 		row, hasRow := m.browser.Selected()
 		if hasRow {
 			if status, handled := SharedAction(row, msg); handled {
-				m.status, m.failed = status, false
+				m.status, m.failed = status.Text, status.Err
 				return m, nil
 			}
 		}

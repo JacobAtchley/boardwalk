@@ -215,7 +215,20 @@ func TestBrowserFilterOwnsCtrlUAndCtrlD(t *testing.T) {
 	}
 }
 
+// stubActions replaces the clipboard and browser shell-outs for the duration of
+// a test. Without it the suite really runs pbcopy and really opens a browser
+// window, and its assertions depend on whether the machine happens to have
+// either command.
+func stubActions(t *testing.T, err error) {
+	t.Helper()
+	copyBefore, openBefore := copyToClipboard, openBrowser
+	copyToClipboard = func(string) error { return err }
+	openBrowser = func(string) error { return err }
+	t.Cleanup(func() { copyToClipboard, openBrowser = copyBefore, openBefore })
+}
+
 func TestSharedActionHandlesTheThreeCommonKeys(t *testing.T) {
+	stubActions(t, nil)
 	row := fakeRow{42, "a thing"}
 
 	for _, tc := range []struct {
@@ -230,13 +243,37 @@ func TestSharedActionHandlesTheThreeCommonKeys(t *testing.T) {
 		if !handled {
 			t.Fatalf("%v was not handled", tc.key)
 		}
-		if got != tc.want {
-			t.Errorf("status = %q, want %q", got, tc.want)
+		if got.Err {
+			t.Errorf("%v reported a failure that did not happen: %q", tc.key, got.Text)
+		}
+		if got.Text != tc.want {
+			t.Errorf("status = %q, want %q", got.Text, tc.want)
 		}
 	}
 
 	if _, handled := SharedAction(row, runes("z")); handled {
 		t.Error("an unrelated key was claimed as a shared action")
+	}
+}
+
+func TestSharedActionReportsAFailedShellOut(t *testing.T) {
+	// pbcopy and open are macOS commands. On a machine without them the status
+	// line used to say "copied id 4021" while nothing had been copied, because
+	// both calls returned an error nobody read.
+	stubActions(t, errTest)
+	row := fakeRow{42, "a thing"}
+
+	for _, key := range []tea.KeyMsg{runes("y"), runes("s"), runes("o")} {
+		got, handled := SharedAction(row, key)
+		if !handled {
+			t.Fatalf("%v was not handled", key)
+		}
+		if !got.Err {
+			t.Errorf("%v reported success after the shell-out failed: %q", key, got.Text)
+		}
+		if !strings.Contains(got.Text, errTest.Error()) {
+			t.Errorf("%v: status = %q, want the failure in it", key, got.Text)
+		}
 	}
 }
 

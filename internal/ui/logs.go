@@ -176,12 +176,14 @@ func (m *Logs) Update(msg tea.Msg) (View, tea.Cmd) {
 			m.status, m.failed = "refreshing…", false
 			return m, cmd
 		case "o":
-			OpenBrowser(m.client.BuildURL(m.build.ID))
-			m.status, m.failed = "opened the build in a browser", false
+			status := report("opened the build in a browser",
+				"could not open a browser", openBrowser(m.client.BuildURL(m.build.ID)))
+			m.status, m.failed = status.Text, status.Err
 			return m, nil
 		case "y":
-			CopyToClipboard(fmt.Sprint(m.build.ID))
-			m.status, m.failed = fmt.Sprintf("copied id %d", m.build.ID), false
+			status := report(fmt.Sprintf("copied id %d", m.build.ID),
+				"could not copy to the clipboard", copyToClipboard(fmt.Sprint(m.build.ID)))
+			m.status, m.failed = status.Text, status.Err
 			return m, nil
 		}
 	}
