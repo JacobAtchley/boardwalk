@@ -143,3 +143,23 @@ func TestBuildsTimelineFailureAllowsARetry(t *testing.T) {
 		t.Error("a failed fetch left the in-flight guard set, blocking a retry")
 	}
 }
+
+func TestBuildsFailedFetchReplacesTheFetchingPlaceholder(t *testing.T) {
+	c, _ := buildFixture()
+	m := NewBuilds(c)
+
+	if got := m.Body(160, 20); !strings.Contains(got, "fetching builds") {
+		t.Fatalf("expected the fetching placeholder before anything lands:\n%s", got)
+	}
+
+	updated, _ := m.Update(ErrMsg{Err: errTest})
+	m = updated.(*Builds)
+
+	got := m.Body(160, 20)
+	if strings.Contains(got, "fetching builds") {
+		t.Errorf("the body still claims to be fetching after the fetch failed:\n%s", got)
+	}
+	if !strings.Contains(got, errTest.Error()) {
+		t.Errorf("the body does not say what went wrong:\n%s", got)
+	}
+}

@@ -304,3 +304,35 @@ func TestWorkItemsBuiltWithItemsDoesNotRefetchThem(t *testing.T) {
 		t.Fatal("the view did not ask for the selected item's discussion")
 	}
 }
+
+func TestWorkItemsFailedFetchReplacesTheFetchingPlaceholder(t *testing.T) {
+	c, _ := fixture()
+	m := NewWorkItems(c, nil, false, false)
+
+	updated, _ := m.Update(ErrMsg{Err: errTest})
+	m = updated.(*WorkItems)
+
+	got := m.Body(testWidth, testHeight)
+	if strings.Contains(got, "fetching work items") {
+		t.Errorf("the body still claims to be fetching after the fetch failed:\n%s", got)
+	}
+	if !strings.Contains(got, errTest.Error()) {
+		t.Errorf("the body does not say what went wrong:\n%s", got)
+	}
+}
+
+func TestWorkItemsRefetchesOnR(t *testing.T) {
+	c, items := fixture()
+	m := sized(t, NewWorkItems(c, items, false, false))
+
+	m, cmd := press(t, m, runes("r"))
+	if cmd == nil {
+		t.Fatal("r did not refetch the work items")
+	}
+	if status, isErr := m.Status(); isErr || !strings.Contains(status, "refresh") {
+		t.Errorf("status = %q, isErr = %v; want the refresh reported", status, isErr)
+	}
+	if !strings.Contains(m.Hints(), "r refresh") {
+		t.Errorf("hints = %q, want the refresh key offered", m.Hints())
+	}
+}

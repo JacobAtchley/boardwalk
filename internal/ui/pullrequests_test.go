@@ -174,3 +174,45 @@ func TestPullRequestsLabelAndURL(t *testing.T) {
 		t.Errorf("URL = %q", row.URL())
 	}
 }
+
+func TestPullRequestsFailedFetchReplacesTheFetchingPlaceholder(t *testing.T) {
+	// loaded is only set by a successful fetch, so a failed one left the body
+	// reading "fetching pull requests…" while the status line under it said the
+	// fetch had failed — two contradictory statements on one screen.
+	c, _ := prFixture()
+	m := NewPullRequests(c)
+
+	if got := m.Body(160, 20); !strings.Contains(got, "fetching pull requests") {
+		t.Fatalf("expected the fetching placeholder before anything lands:\n%s", got)
+	}
+
+	updated, _ := m.Update(ErrMsg{Err: errTest})
+	m = updated.(*PullRequests)
+
+	got := m.Body(160, 20)
+	if strings.Contains(got, "fetching pull requests") {
+		t.Errorf("the body still claims to be fetching after the fetch failed:\n%s", got)
+	}
+	if !strings.Contains(got, errTest.Error()) {
+		t.Errorf("the body does not say what went wrong:\n%s", got)
+	}
+}
+
+func TestPullRequestsRefetchesOnR(t *testing.T) {
+	// Without a refresh key a failed initial fetch is unrecoverable short of
+	// restarting boardwalk.
+	m := newPRs(t)
+
+	updated, cmd := m.Update(runes("r"))
+	m = updated.(*PullRequests)
+
+	if cmd == nil {
+		t.Fatal("r did not refetch the pull requests")
+	}
+	if status, isErr := m.Status(); isErr || !strings.Contains(status, "refresh") {
+		t.Errorf("status = %q, isErr = %v; want the refresh reported", status, isErr)
+	}
+	if !strings.Contains(m.Hints(), "r refresh") {
+		t.Errorf("hints = %q, want the refresh key offered", m.Hints())
+	}
+}

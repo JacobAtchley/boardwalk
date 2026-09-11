@@ -278,7 +278,7 @@ func (m *Builds) renderDetail(row Row, width int) string {
 func (m *Builds) Body(width, height int) string {
 	m.browser.SetSize(width, height)
 	if !m.loaded {
-		return chromeStyle.Render("fetching builds…")
+		return placeholder("builds", m.status, m.failed)
 	}
 	return m.browser.View()
 }

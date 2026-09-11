@@ -264,6 +264,11 @@ func (m *PullRequests) Update(msg tea.Msg) (View, tea.Cmd) {
 			m.repoOnly = !m.repoOnly
 			m.applyFilters()
 			return m, m.fetchThreads()
+		case "r":
+			m.counts = map[int]azdo.ThreadCounts{}
+			m.loading = map[int]bool{}
+			m.status, m.failed = "refreshing…", false
+			return m, m.Init()
 		}
 	}
 
@@ -315,7 +320,7 @@ func (m *PullRequests) renderDetail(row Row, width int) string {
 func (m *PullRequests) Body(width, height int) string {
 	m.browser.SetSize(width, height)
 	if !m.loaded {
-		return chromeStyle.Render("fetching pull requests…")
+		return placeholder("pull requests", m.status, m.failed)
 	}
 	return m.browser.View()
 }
@@ -333,7 +338,7 @@ func (m *PullRequests) Title() string {
 
 // Hints is the key line at the bottom.
 func (m *PullRequests) Hints() string {
-	return "d drafts · ^t repo/all · " + SharedHints + " · esc back"
+	return "d drafts · ^t repo/all · r refresh · " + SharedHints + " · esc back"
 }
 
 // Status is the transient status line, or the fuzzy filter prompt while one is
