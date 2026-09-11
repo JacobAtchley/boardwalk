@@ -109,7 +109,14 @@ func (b *Browser) Selected() (Row, bool) {
 // anything reaches the list, so a description, acceptance criteria and
 // discussion that together overflow the pane stay reachable. The list's own
 // paging keys are pgup/b and pgdown/f, so these two are free — see
-// bubbles/list's DefaultKeyMap.
+// bubbles/list's DefaultKeyMap. That claim only holds while the filter prompt
+// is closed, though: bubbles/textinput's own keymap binds ctrl+u to
+// DeleteBeforeCursor and ctrl+d to DeleteCharacterForward, and
+// list.handleFiltering forwards every key straight to that input while
+// Filtering is true. Stealing the keys there would silently swallow the
+// user's line-editing keystrokes to scroll a pane they aren't even looking
+// at, so the interception is skipped whenever Filtering is true and the keys
+// fall through to the list (and from there to the filter input) instead.
 //
 // Comparing the row rather than the cursor position is deliberate: filtering
 // replaces the matched set asynchronously, via a list.FilterMatchesMsg that
@@ -118,7 +125,7 @@ func (b *Browser) Selected() (Row, bool) {
 // index comparison alone would miss it, leaving the pane on stale data as the
 // query narrows.
 func (b *Browser) Update(msg tea.Msg) tea.Cmd {
-	if key, ok := msg.(tea.KeyMsg); ok {
+	if key, ok := msg.(tea.KeyMsg); ok && !b.Filtering() {
 		switch key.String() {
 		case "ctrl+u":
 			b.detail.HalfPageUp()

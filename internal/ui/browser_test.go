@@ -187,6 +187,34 @@ func TestBrowserDetailPaneScrollsIndependentlyOfTheList(t *testing.T) {
 	}
 }
 
+func TestBrowserFilterOwnsCtrlUAndCtrlD(t *testing.T) {
+	// bubbles/textinput's own keymap binds ctrl+u to DeleteBeforeCursor and
+	// ctrl+d to DeleteCharacterForward, and list.handleFiltering forwards
+	// every key straight to that input while filtering. The detail-scroll
+	// interception must not steal those keys out from under the user's
+	// line editing.
+	b := testBrowser(t)
+
+	b.Update(runes("/"))
+	if !b.Filtering() {
+		t.Fatal("pressing / did not start filtering")
+	}
+	b.Update(runes("abc"))
+	if !strings.Contains(b.FilterView(), "abc") {
+		t.Fatalf("filter input did not take the keystrokes: %q", b.FilterView())
+	}
+
+	viewBefore := b.View()
+	b.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+
+	if strings.Contains(b.FilterView(), "abc") {
+		t.Errorf("ctrl+u should have cleared the filter input, got %q", b.FilterView())
+	}
+	if b.View() != viewBefore {
+		t.Error("ctrl+u should edit the filter input while filtering, not scroll the detail pane")
+	}
+}
+
 func TestSharedActionHandlesTheThreeCommonKeys(t *testing.T) {
 	row := fakeRow{42, "a thing"}
 
