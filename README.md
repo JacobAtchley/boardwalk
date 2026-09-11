@@ -172,6 +172,26 @@ tailing a live build.
 
 ## Roadmap
 
+Features:
+
 - A repository picker for the branch flow, for running boardwalk outside a repo
 - Search inside the log pane
 - Pull request creation from a work item's branch
+- Caching views in the menu, so re-entering one does not refetch the project
+
+Known rough edges, none of them load-bearing:
+
+- `Comments()` reads one page, so a very long discussion is silently truncated.
+  The endpoint supports a `continuationToken`.
+- A build row whose timeline fetch failed retries every few seconds for as long
+  as a log pane is tailing, because the hidden build list still receives the
+  tail's messages.
+- A refresh that fails while you are inside a log pane reports nothing: the
+  error is delivered to the pane on top and dropped, and the build list keeps
+  reading `refreshing…`.
+- A row refresh that lands while the branch prompt is open rebuilds the list
+  underneath it. If the server's order changed, the branch could be named for
+  one work item and attached to another.
+- Lazily arriving rows scroll the detail pane back to the top.
+- A copy or open failure is reported, but the raw `exec` error is not always
+  the clearest thing to read.
