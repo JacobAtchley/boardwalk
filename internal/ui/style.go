@@ -88,6 +88,15 @@ func padRight(s string, width int) string {
 	return s
 }
 
+// shade picks the nth colour of a gradient, holding the last one for any row
+// beyond the list.
+func shade(shades []string, i int) lipgloss.Color {
+	if i >= len(shades) {
+		i = len(shades) - 1
+	}
+	return lipgloss.Color(shades[i])
+}
+
 // statusGlyph pairs a build status with a coloured marker, so the state reads
 // at a glance without the word taking a column of its own.
 func statusGlyph(s azdo.BuildStatus) string {

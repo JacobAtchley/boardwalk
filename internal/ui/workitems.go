@@ -371,3 +371,9 @@ func (m *WorkItems) Status() (string, bool) {
 	}
 	return m.status, m.failed
 }
+
+// Prompting reports whether a text prompt is open, so Root leaves esc and q to
+// the prompt rather than treating them as navigation.
+func (m *WorkItems) Prompting() bool {
+	return m.branchPrompt != nil || m.browser.Filtering()
+}
