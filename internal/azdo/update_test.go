@@ -9,19 +9,19 @@ import (
 
 func TestBranchArtifactURL(t *testing.T) {
 	for _, tc := range []struct {
-		name                   string
-		project, repo, branch  string
-		want                   string
+		name                  string
+		project, repo, branch string
+		want                  string
 	}{
 		{
-			name: "a flat branch name",
+			name:    "a flat branch name",
 			project: "p1", repo: "r1", branch: "main",
 			want: "vstfs:///Git/Ref/p1%2Fr1%2FGBmain",
 		},
 		{
 			// The separators and the slashes inside the branch are both encoded,
 			// which is why the branch cannot simply be concatenated.
-			name: "a branch containing a slash",
+			name:    "a branch containing a slash",
 			project: "p1", repo: "r1", branch: "feature/4021-retry",
 			want: "vstfs:///Git/Ref/p1%2Fr1%2FGBfeature%2F4021-retry",
 		},

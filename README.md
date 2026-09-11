@@ -1,23 +1,23 @@
 # boardwalk
 
-A terminal browser for Azure DevOps boards. Fuzzy-find a work item, then open
-it, copy its id, copy a Slack-ready link, or start a branch for it — without
-leaving the shell.
+A terminal browser for Azure DevOps: work items, pull requests, and pipeline
+builds. Fuzzy-find something, then open it, copy its id, copy a Slack-ready
+link, or — for a work item — start a branch for it, all without leaving the
+shell.
 
 ```
-work items (all 3) · acme/Platform
-▸ 4021    [User Story]   Active           Dev Example        Retry webh…│  #4021  Retry webhook delivery on 5xx
-  4020    [Enhancement]  Needs Refinement (unassigned)       Tidy up th…│
-  3998    [Feature]      Pending QA       Dev Example        Cache tena…│  type:      User Story
-                                                                       │  state:     Active
-                                                                       │  assigned:  Dev Example
-                                                                       │  tags:      webhooks, reliability
-                                                                       │  iteration: Platform\Sprint 42
-                                                                       │
-                                                                       │  Deliveries that fail with a 5xx should
-                                                                       │  retry with exponential backoff rather than
-                                                                       │  dropping on the floor.
-^t mine/all · / filter · o open · y copy id · s slack · b branch · q quit
+ ██████╗  ██████╗  █████╗ ██████╗ ██████╗ ██╗    ██╗ █████╗ ██╗     ██╗  ██╗
+ ██╔══██╗██╔═══██╗██╔══██╗██╔══██╗██╔══██╗██║    ██║██╔══██╗██║     ██║ ██╔╝
+ ██████╔╝██║   ██║███████║██████╔╝██║  ██║██║ █╗ ██║███████║██║     █████╔╝
+ ██╔══██╗██║   ██║██╔══██║██╔══██╗██║  ██║██║███╗██║██╔══██║██║     ██╔═██╗
+ ██████╔╝╚██████╔╝██║  ██║██║  ██║██████╔╝╚███╔███╔╝██║  ██║███████╗██║  ██╗
+ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝  ╚══╝╚══╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝
+
+▸ work items       browse, branch and set state
+  pull requests    drafts, branches, comments and age
+  builds           pipeline runs, current step and logs
+
+acme/Platform · ↑↓ move · enter open · q quit
 ```
 
 ## Install
@@ -45,22 +45,58 @@ already established, so there is nothing extra to configure or store.
 ## Usage
 
 ```sh
-boardwalk              # every open work item in the project
-boardwalk -mine        # start filtered to items assigned to you
+boardwalk              # the menu
+boardwalk items        # straight to work items
+boardwalk prs          # straight to pull requests
+boardwalk builds       # straight to pipeline builds
+boardwalk -mine        # work items assigned to you
 boardwalk -all         # include closed/done/resolved/removed
-boardwalk -dump        # print rows and exit, no TUI — for scripts and pipes
+boardwalk -dump        # print work item rows and exit — for scripts and pipes
 boardwalk -timing      # report fetch duration on stderr
 ```
 
+### Everywhere
+
 | key | |
 |---|---|
-| `/` | fuzzy filter across id, type, state, assignee and title |
-| `^t` | toggle between everyone's items and yours |
-| `o` | open in the browser |
-| `y` | copy the work item id |
+| `/` | fuzzy filter |
+| `y` | copy the id |
 | `s` | copy a Slack message — `[#4021 title](link)` |
-| `b` | hand `azdo-branch <id>` to the shell |
+| `o` | open in the browser |
+| `esc` | back to the menu |
 | `q` | quit |
+
+### Work items
+
+| key | |
+|---|---|
+| `^t` | toggle between everyone's items and yours |
+| `a` | set the item Active |
+| `b` | create a branch, set the item Active, and link the branch to it |
+
+### Pull requests
+
+| key | |
+|---|---|
+| `d` | cycle drafts hidden → drafts only → all |
+| `^t` | toggle between this repository and the whole project |
+
+### Builds
+
+| key | |
+|---|---|
+| `enter` | open the logs |
+| `r` | refetch |
+
+### Logs
+
+| key | |
+|---|---|
+| `g` / `G` | top / bottom |
+| `r` | refetch |
+
+A running build's logs append on their own every few seconds, and stop when the
+build finishes.
 
 ## Shell integration
 
@@ -104,8 +140,15 @@ az CLI's truncated 1000.
 **`workitemsbatch` ignores the order ids are sent in** and answers ascending,
 so the query's `ORDER BY [System.Id] DESC` has to be reapplied client-side.
 
+**The build log's `startLine` parameter is undocumented as 0- or 1-based.**
+Azure DevOps's reference calls it only "the start line." boardwalk treats it
+as a 0-based offset equal to the number of lines already consumed on each
+tail poll. If it turns out to be 1-based instead, every poll of a running
+build re-shows one line that was already displayed — watch for that when
+tailing a live build.
+
 ## Roadmap
 
-- Pull requests and pipeline builds, as sibling views
-- Branch creation in-process, rather than shelling out to `azdo-branch`
-- `boardwalk` as a multi-command binary (`boardwalk prs`, `boardwalk builds`)
+- A repository picker for the branch flow, for running boardwalk outside a repo
+- Search inside the log pane
+- Pull request creation from a work item's branch
