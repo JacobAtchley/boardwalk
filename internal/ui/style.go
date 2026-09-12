@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -137,4 +138,17 @@ func statusGlyph(s azdo.BuildStatus) string {
 	default:
 		return chromeStyle.Render("· queued")
 	}
+}
+
+// newHelp builds the help component in boardwalk's chrome colours, so the key
+// line reads as part of the frame rather than as content.
+func newHelp() help.Model {
+	h := help.New()
+	h.Styles.ShortKey = labelStyle
+	h.Styles.ShortDesc = chromeStyle
+	h.Styles.ShortSeparator = chromeStyle
+	h.Styles.FullKey = labelStyle
+	h.Styles.FullDesc = chromeStyle
+	h.Styles.FullSeparator = chromeStyle
+	return h
 }

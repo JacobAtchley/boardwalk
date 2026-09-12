@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -298,8 +299,8 @@ func (m *Builds) Title() string {
 }
 
 // Hints is the key line at the bottom.
-func (m *Builds) Hints() string {
-	return "enter logs · r refresh · " + SharedHints + " · esc back"
+func (m *Builds) Keys() help.KeyMap {
+	return listKeys(keyLogs)
 }
 
 // Status is the transient status line, or the fuzzy filter prompt while one is

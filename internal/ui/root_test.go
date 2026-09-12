@@ -6,6 +6,7 @@ import (
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func buildStub() azdo.Build {
@@ -86,7 +87,7 @@ func TestRootEscapeReturnsToTheMenu(t *testing.T) {
 	updated, _ := r.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	r = updated.(*Root)
 
-	if !strings.Contains(r.View(), "pull requests") || strings.Contains(r.View(), "^t mine/all") {
+	if !strings.Contains(r.View(), "pull requests") || strings.Contains(r.View(), "^t scope") {
 		t.Errorf("escape did not return to the menu:\n%s", r.View())
 	}
 }
@@ -128,7 +129,7 @@ func TestRootRendersChromeAroundTheView(t *testing.T) {
 		t.Error("the header is missing")
 	}
 	if !strings.Contains(view, "esc back") {
-		t.Error("the hint line is missing")
+		t.Error("the help line is missing")
 	}
 }
 
@@ -212,7 +213,7 @@ func TestRootLeavesEscAndQToAnOpenPrompt(t *testing.T) {
 					t.Errorf("%v quit the program with %s open", key, name)
 				}
 			}
-			if !strings.Contains(r.View(), "^t mine/all") {
+			if !strings.Contains(r.View(), "^t scope") {
 				t.Errorf("%v popped the view instead of going to %s:\n%s", key, name, r.View())
 			}
 		}
@@ -331,5 +332,63 @@ func TestRootKeepsTheStatusLineForTheViewOnTop(t *testing.T) {
 	// state and not something a hidden view was told.
 	if status, _ := r.stack[0].Status(); strings.Contains(status, "a status for the top view") {
 		t.Errorf("a hidden view took the status line: %q", status)
+	}
+}
+
+func TestRootTogglesTheFullHelpPanel(t *testing.T) {
+	r := newRoot(t, "items")
+
+	// Asserted on the descriptions: the full panel pads keys into columns, so
+	// the key and its description are not adjacent in the rendered text.
+	line := r.View()
+	if strings.Contains(line, "detail up") {
+		t.Fatalf("the panel's keys are on the short line already:\n%s", line)
+	}
+
+	updated, _ := r.Update(runes("?"))
+	r = updated.(*Root)
+
+	open := r.View()
+	for _, want := range []string{"detail up", "detail down", "quit", "branch"} {
+		if !strings.Contains(open, want) {
+			t.Errorf("the full panel is missing %q:\n%s", want, open)
+		}
+	}
+
+	updated, _ = r.Update(runes("?"))
+	r = updated.(*Root)
+	if strings.Contains(r.View(), "detail up") {
+		t.Error("? did not close the panel again")
+	}
+}
+
+func TestRootGivesTheBodyLessRoomWhenTheHelpPanelOpens(t *testing.T) {
+	// The panel is several rows tall. Sizing the body from a constant would
+	// push the status line off the bottom of the terminal when it opened.
+	r := newRoot(t, "items")
+	closed := lipgloss.Height(r.View())
+
+	updated, _ := r.Update(runes("?"))
+	r = updated.(*Root)
+	opened := lipgloss.Height(r.View())
+
+	if opened != closed {
+		t.Errorf("the frame is %d rows with the panel open and %d closed; it must stay the terminal's height", opened, closed)
+	}
+}
+
+func TestRootLeavesTheHelpKeyToAnOpenPrompt(t *testing.T) {
+	// "?" is a character someone can type into a branch name or a filter.
+	for name, open := range openPrompt {
+		r := newRoot(t, "items")
+		updated, _ := r.Update(open)
+		r = updated.(*Root)
+
+		updated, _ = r.Update(runes("?"))
+		r = updated.(*Root)
+
+		if r.help.ShowAll {
+			t.Errorf("? opened the help panel instead of reaching %s", name)
+		}
 	}
 }

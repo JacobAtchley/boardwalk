@@ -212,8 +212,8 @@ func TestPullRequestsRefetchesOnR(t *testing.T) {
 	if status, isErr := m.Status(); isErr || !strings.Contains(status, "refresh") {
 		t.Errorf("status = %q, isErr = %v; want the refresh reported", status, isErr)
 	}
-	if !strings.Contains(m.Hints(), "r refresh") {
-		t.Errorf("hints = %q, want the refresh key offered", m.Hints())
+	if !strings.Contains(helpLine(m.Keys()), "r refresh") {
+		t.Errorf("help = %q, want the refresh key offered", helpLine(m.Keys()))
 	}
 }
 

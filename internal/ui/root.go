@@ -5,7 +5,10 @@ import (
 	"strings"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // initView is the optional initialiser a view implements when it has data to
@@ -39,6 +42,10 @@ type Root struct {
 	stack  []View
 	choice int
 
+	// help renders a view's bindings: one line by default, every group when
+	// the user presses "?".
+	help help.Model
+
 	width, height int
 
 	// command is printed on exit for the shell wrapper to put on the prompt.
@@ -51,7 +58,7 @@ type Root struct {
 // on entry, so the menu paints before anything touches the network — and a
 // view reached from the menu loads its own data however boardwalk was started.
 func NewRoot(c *azdo.Client, mineOnly, includeClosed bool, start string) *Root {
-	r := &Root{client: c, mineOnly: mineOnly, includeClosed: includeClosed}
+	r := &Root{client: c, mineOnly: mineOnly, includeClosed: includeClosed, help: newHelp()}
 	if start != "" {
 		if v := r.build(start); v != nil {
 			r.stack = append(r.stack, v)
@@ -209,6 +216,11 @@ func (r *Root) key(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return nil, false
 	}
 
+	if key.Matches(msg, keyHelp) {
+		r.help.ShowAll = !r.help.ShowAll
+		return nil, true
+	}
+
 	switch msg.String() {
 	case "esc":
 		r.stack = r.stack[:len(r.stack)-1]
@@ -246,8 +258,12 @@ func (r *Root) View() string {
 		return r.menuView()
 	}
 
-	// header, a blank line, hints, status
-	body := top.Body(r.width, max(1, r.height-4))
+	// The help panel is one line closed and several open, so the body is sized
+	// from what it actually renders rather than from a constant. The title and
+	// the status line are one row each.
+	r.help.Width = r.width
+	helpView := r.help.View(top.Keys())
+	body := top.Body(r.width, max(1, r.height-lipgloss.Height(helpView)-2))
 
 	status, isErr := top.Status()
 	style := statusStyle
@@ -258,7 +274,7 @@ func (r *Root) View() string {
 	return strings.Join([]string{
 		chromeStyle.Render(top.Title()),
 		body,
-		chromeStyle.Render(top.Hints()),
+		helpView,
 		style.Render(truncate(status, r.width)),
 	}, "\n")
 }

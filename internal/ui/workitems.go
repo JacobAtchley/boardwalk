@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -426,8 +427,8 @@ func (m *WorkItems) Title() string {
 }
 
 // Hints is the key line at the bottom.
-func (m *WorkItems) Hints() string {
-	return "^t mine/all · a active · b branch · r refresh · " + SharedHints + " · esc back"
+func (m *WorkItems) Keys() help.KeyMap {
+	return listKeys(keyScope, keyActive, keyBranch)
 }
 
 // Status is the transient status line, or a prompt while one is open: the

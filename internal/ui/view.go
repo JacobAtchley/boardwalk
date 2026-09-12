@@ -1,8 +1,11 @@
 package ui
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	"github.com/charmbracelet/bubbles/help"
+	tea "github.com/charmbracelet/bubbletea"
+)
 
-// View is one screen inside boardwalk. Root owns the header, the hint line and
+// View is one screen inside boardwalk. Root owns the header, the help line and
 // the status line, so a view only renders its own body — which keeps the chrome
 // identical everywhere and in one place.
 type View interface {
@@ -17,8 +20,11 @@ type View interface {
 	// Title is the header line, for example "pull requests (42) · acme/Platform".
 	Title() string
 
-	// Hints is the key line at the bottom.
-	Hints() string
+	// Keys are the view's bindings. Root renders them as the footer's short
+	// help line, and as the panel behind "?". Returning bindings rather than a
+	// prose hint line keeps what the footer claims and what the keys do from
+	// drifting apart.
+	Keys() help.KeyMap
 
 	// Status is the transient message under the hints, and whether it is an
 	// error, which decides its colour.

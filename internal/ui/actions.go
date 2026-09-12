@@ -8,9 +8,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// SharedHints is the part of the key line every view has in common.
-const SharedHints = "/ filter · y copy id · s slack · o open · ^u/^d detail"
-
 // copyToClipboard and openBrowser are indirected through variables so a test
 // can drive both outcomes without depending on whether the machine has pbcopy
 // and open — and without really opening a browser window while the suite runs.

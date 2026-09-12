@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -243,11 +245,18 @@ func (m *Logs) Title() string {
 
 // Hints is the key line at the bottom. Refresh only makes sense once tailing
 // has stopped — otherwise a poll is already on its way.
-func (m *Logs) Hints() string {
+// Keys omits the filter and the Slack link: the log pane is a pager over one
+// build, not a list of things to act on. Refresh only appears once the build
+// has finished, since a running one is already tailing itself.
+func (m *Logs) Keys() help.KeyMap {
+	own := []key.Binding{keyTop, keyBottom}
 	if m.build.Status.Done() {
-		return "g/G top/bottom · r refresh · y copy id · o open · esc back"
+		own = append(own, keyRefresh)
 	}
-	return "g/G top/bottom · tailing · y copy id · o open · esc back"
+	return keyMap{
+		short:  append(append([]key.Binding{}, own...), keyCopyID, keyOpen, keyHelp),
+		groups: [][]key.Binding{own, {keyCopyID, keyOpen}, navBindings()},
+	}
 }
 
 // Status is the transient status line.

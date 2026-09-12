@@ -77,8 +77,8 @@ func TestLogsStopsTailingWhenTheBuildFinishes(t *testing.T) {
 	if !strings.Contains(m.Title(), "succeeded") {
 		t.Errorf("title = %q, want the final status", m.Title())
 	}
-	if !strings.Contains(m.Hints(), "r refresh") {
-		t.Errorf("hints = %q, want refresh offered once tailing stops", m.Hints())
+	if !strings.Contains(helpLine(m.Keys()), "r refresh") {
+		t.Errorf("help = %q, want refresh offered once tailing stops", helpLine(m.Keys()))
 	}
 }
 

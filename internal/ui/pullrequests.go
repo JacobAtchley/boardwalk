@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -347,8 +348,8 @@ func (m *PullRequests) Title() string {
 }
 
 // Hints is the key line at the bottom.
-func (m *PullRequests) Hints() string {
-	return "d drafts · ^t repo/all · r refresh · " + SharedHints + " · esc back"
+func (m *PullRequests) Keys() help.KeyMap {
+	return listKeys(keyDrafts, keyScope)
 }
 
 // Status is the transient status line, or the fuzzy filter prompt while one is

@@ -66,8 +66,8 @@ func TestViewRendersListAndDetailSideBySide(t *testing.T) {
 	if !strings.Contains(m.Title(), "work items (all 3)") || !strings.Contains(m.Title(), "acme/Platform") {
 		t.Errorf("title = %q, missing expected pieces", m.Title())
 	}
-	if !strings.Contains(m.Hints(), "^t mine/all") {
-		t.Errorf("hints = %q, missing toggle hint", m.Hints())
+	if !strings.Contains(helpLine(m.Keys()), "^t scope") {
+		t.Errorf("help = %q, missing the scope toggle", helpLine(m.Keys()))
 	}
 
 	// The detail pane must sit beside the list, not beneath it: the first row
@@ -332,7 +332,7 @@ func TestWorkItemsRefetchesOnR(t *testing.T) {
 	if status, isErr := m.Status(); isErr || !strings.Contains(status, "refresh") {
 		t.Errorf("status = %q, isErr = %v; want the refresh reported", status, isErr)
 	}
-	if !strings.Contains(m.Hints(), "r refresh") {
-		t.Errorf("hints = %q, want the refresh key offered", m.Hints())
+	if !strings.Contains(helpLine(m.Keys()), "r refresh") {
+		t.Errorf("help = %q, want the refresh key offered", helpLine(m.Keys()))
 	}
 }

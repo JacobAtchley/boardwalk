@@ -80,8 +80,13 @@ rather than a list and binds only its own keys, below.
 | `o` | open in the browser |
 | `r` | refresh |
 | `^u` / `^d` | scroll the detail pane |
+| `?` | show every binding for the current view |
 | `esc` | back to the menu |
 | `q` | quit |
+
+The footer lists the keys that fit on one line; `?` opens the rest. The
+bindings and the footer come from the same declarations, so a key that works
+is a key that is listed.
 
 `esc` never quits: it pops one level, and from a top-level view that is the
 menu. `q` quits from a top-level view and goes back from a drill-down. `^c`
