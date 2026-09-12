@@ -47,8 +47,3 @@ type StatusMsg struct {
 // ErrMsg is a failed fetch. Root renders it on the status line and the view
 // keeps whatever data it already had.
 type ErrMsg struct{ Err error }
-
-// ShellCommandMsg quits, printing a command for the shell wrapper to put on the
-// prompt. A child process cannot drive its parent's line editor, so this is the
-// only way to hand work back to the shell.
-type ShellCommandMsg struct{ Command string }

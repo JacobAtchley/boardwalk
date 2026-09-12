@@ -133,23 +133,6 @@ func TestRootRendersChromeAroundTheView(t *testing.T) {
 	}
 }
 
-func TestRootShellCommandQuits(t *testing.T) {
-	r := newRoot(t, "items")
-
-	updated, cmd := r.Update(ShellCommandMsg{Command: "git checkout feature/x"})
-	r = updated.(*Root)
-
-	if r.ShellCommand() != "git checkout feature/x" {
-		t.Errorf("ShellCommand = %q", r.ShellCommand())
-	}
-	if cmd == nil {
-		t.Fatal("a shell command did not quit")
-	}
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Errorf("a shell command produced %T, want a quit", cmd())
-	}
-}
-
 func TestRootQuitsOnQFromTheMenu(t *testing.T) {
 	r := newRoot(t, "")
 

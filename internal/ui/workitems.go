@@ -172,6 +172,15 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 		if msg.Activated {
 			m.setRowState(msg.ID, "Active")
 		}
+		// The checkout command is only worth handing over once the ref is
+		// really on the server, but it is worth handing over even when a
+		// later step failed — the branch is there either way, and retyping it
+		// by hand is exactly what this saves.
+		copied := false
+		if msg.Created {
+			copied = copyToClipboard(CheckoutCommand(msg.Branch)) == nil
+		}
+
 		if msg.Err != nil {
 			m.failed = true
 			m.status = msg.Err.Error()
@@ -180,12 +189,16 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 			}
 			return m, nil
 		}
+
 		m.status, m.failed = strings.Join(msg.Steps, " · "), false
-		// The shell has to do the checkout: a child process cannot move its
-		// parent's working tree.
-		return m, func() tea.Msg {
-			return ShellCommandMsg{Command: fmt.Sprintf("git fetch origin && git checkout %s", msg.Branch)}
+		// boardwalk cannot move another shell's working tree, so the checkout
+		// goes on the clipboard: open a shell in the repository and paste.
+		if copied {
+			m.status += " · checkout command copied — paste it in the repository"
+		} else {
+			m.status += " · could not copy the checkout command: " + CheckoutCommand(msg.Branch)
 		}
+		return m, nil
 
 	case stateSetMsg:
 		if msg.Err != nil {
