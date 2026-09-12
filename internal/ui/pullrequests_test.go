@@ -216,3 +216,63 @@ func TestPullRequestsRefetchesOnR(t *testing.T) {
 		t.Errorf("hints = %q, want the refresh key offered", m.Hints())
 	}
 }
+
+func TestPullRequestsSpinsWhileLoadingAndStopsWhenItLands(t *testing.T) {
+	c, prs := prFixture()
+	m := NewPullRequests(c)
+	m.now = func() time.Time { return time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC) }
+	m.repoOnly = false
+	m.drafts = draftsAll // both fixture rows visible, so the fan-out is two deep
+
+	if cmd := m.Init(); cmd == nil {
+		t.Fatal("Init produced no command")
+	}
+	r := drive(t, m, 160, 20)
+
+	if !strings.Contains(r.frame(), "fetching pull requests") {
+		t.Fatalf("body is not the loading placeholder:\n%s", r.frame())
+	}
+	if !m.work.busy() {
+		t.Error("the view is not busy while its first fetch is outstanding")
+	}
+
+	// The listing lands and immediately fans out one thread fetch per row.
+	r.send(prsMsg{PRs: prs})
+	if !m.work.busy() {
+		t.Fatal("stopped spinning between the listing landing and its thread fetches")
+	}
+
+	// One of the two answers. The spinner has to outlast it.
+	r.send(threadsMsg{PR: 512, Counts: azdo.ThreadCounts{Resolved: 4, Unresolved: 2}})
+	if !m.work.busy() {
+		t.Error("stopped spinning after the first of two batched calls landed")
+	}
+	if status, _ := m.Status(); status == "" {
+		t.Error("the status line carries no spinner while work is outstanding")
+	}
+
+	// The last one. Now it stops.
+	r.send(threadsMsg{PR: 511, Counts: azdo.ThreadCounts{}})
+	if m.work.busy() {
+		t.Error("still spinning after every batched call landed")
+	}
+	if status, _ := m.Status(); status != "" {
+		t.Errorf("status = %q, want it empty once the spinner stops", status)
+	}
+}
+
+func TestPullRequestsStopsSpinningWhenAFetchFails(t *testing.T) {
+	// A failure that left the counter up would spin forever with nothing
+	// running — the same shape as the in-flight guards that stranded rows.
+	c, _ := prFixture()
+	m := NewPullRequests(c)
+	m.repoOnly = false
+	m.Init()
+	r := drive(t, m, 160, 20)
+
+	r.send(ErrMsg{Err: errTest})
+
+	if m.work.busy() {
+		t.Error("still spinning after the fetch failed")
+	}
+}

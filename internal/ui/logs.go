@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -51,6 +52,7 @@ type Logs struct {
 
 	status string
 	failed bool
+	work   work
 }
 
 // NewLogs opens the log pane for one build. records is the timeline the build
@@ -63,6 +65,7 @@ func NewLogs(c *azdo.Client, b azdo.Build, records []azdo.Record) *Logs {
 		viewport: viewport.New(0, 0),
 		records:  records,
 		cursor:   azdo.LogCursor{},
+		work:     newWork(),
 	}
 }
 
@@ -78,7 +81,7 @@ func (m *Logs) startFetch() tea.Cmd {
 		return nil
 	}
 	m.fetching = true
-	return m.fetch()
+	return tea.Batch(m.fetch(), m.work.begin(1))
 }
 
 // fetch reads whatever the logs have gained, and refreshes the timeline so a
@@ -127,10 +130,14 @@ func tailTick() tea.Cmd {
 // Update handles input and fetch results. It satisfies View.
 func (m *Logs) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		return m, m.work.tick(msg)
+
 	case logChunksMsg:
 		// Cleared before anything else: every path that sets fetching must
 		// clear it, or the tail deadlocks the first time a poll fails.
 		m.fetching = false
+		m.work.done()
 
 		if msg.Err != nil {
 			m.status, m.failed = msg.Err.Error(), true
@@ -223,7 +230,7 @@ func (m *Logs) append(chunks []azdo.LogChunk) {
 func (m *Logs) Body(width, height int) string {
 	m.viewport.Width, m.viewport.Height = width, height
 	if m.text.Len() == 0 {
-		return chromeStyle.Render("fetching the build log…")
+		return chromeStyle.Render(m.work.View() + "fetching the build log…")
 	}
 	return m.viewport.View()
 }
@@ -244,4 +251,4 @@ func (m *Logs) Hints() string {
 }
 
 // Status is the transient status line.
-func (m *Logs) Status() (string, bool) { return m.status, m.failed }
+func (m *Logs) Status() (string, bool) { return m.work.View() + m.status, m.failed }

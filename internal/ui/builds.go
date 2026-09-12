@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -88,6 +89,7 @@ type Builds struct {
 	loaded bool
 	status string
 	failed bool
+	work   work
 	now    func() time.Time
 }
 
@@ -101,6 +103,7 @@ func NewBuilds(c *azdo.Client) *Builds {
 		progress: map[int]azdo.Progress{},
 		records:  map[int][]azdo.Record{},
 		loading:  map[int]bool{},
+		work:     newWork(),
 		now:      time.Now,
 	}
 	m.browser.Detail = m.renderDetail
@@ -110,13 +113,14 @@ func NewBuilds(c *azdo.Client) *Builds {
 // Init fetches the project's recent runs.
 func (m *Builds) Init() tea.Cmd {
 	client := m.client
-	return func() tea.Msg {
+	fetch := func() tea.Msg {
 		builds, err := client.Builds(buildPageSize)
 		if err != nil {
 			return ErrMsg{Err: fmt.Errorf("could not fetch builds: %w", err)}
 		}
 		return buildsMsg{Builds: builds}
 	}
+	return tea.Batch(fetch, m.work.begin(1))
 }
 
 // applyRows rebuilds the browser's rows, carrying forward whatever timelines
@@ -161,13 +165,17 @@ func (m *Builds) fetchTimelines() tea.Cmd {
 			return timelineMsg{Build: buildID, Progress: progress, Records: records, Err: err}
 		})
 	}
-	return tea.Batch(cmds...)
+	return tea.Batch(tea.Batch(cmds...), m.work.begin(len(cmds)))
 }
 
 // Update handles input and fetch results. It satisfies View.
 func (m *Builds) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		return m, m.work.tick(msg)
+
 	case buildsMsg:
+		m.work.done()
 		m.builds, m.loaded = msg.Builds, true
 		m.applyRows()
 		return m, m.fetchTimelines()
@@ -186,6 +194,7 @@ func (m *Builds) Update(msg tea.Msg) (View, tea.Cmd) {
 		return m, nil
 
 	case ErrMsg:
+		m.work.done()
 		m.status, m.failed = msg.Err.Error(), true
 		return m, nil
 
@@ -278,7 +287,7 @@ func (m *Builds) renderDetail(row Row, width int) string {
 func (m *Builds) Body(width, height int) string {
 	m.browser.SetSize(width, height)
 	if !m.loaded {
-		return placeholder("builds", m.status, m.failed)
+		return placeholder("builds", m.status, m.failed, m.work.View())
 	}
 	return m.browser.View()
 }
@@ -299,7 +308,7 @@ func (m *Builds) Status() (string, bool) {
 	if m.browser.Filtering() {
 		return m.browser.FilterView(), false
 	}
-	return m.status, m.failed
+	return m.work.View() + m.status, m.failed
 }
 
 // Prompting reports whether a text prompt is open, so Root leaves esc and q to

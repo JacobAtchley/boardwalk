@@ -64,11 +64,11 @@ func truncate(s string, width int) string {
 // fetch that has already failed says so here: leaving the body on "fetching…"
 // while the status line under it reports the failure puts two contradictory
 // statements on one screen, with nothing to say which is current.
-func placeholder(what, status string, failed bool) string {
+func placeholder(what, status string, failed bool, spin string) string {
 	if failed && status != "" {
 		return errStyle.Render(status) + "\n" + chromeStyle.Render("press r to try again")
 	}
-	return chromeStyle.Render("fetching " + what + "…")
+	return chromeStyle.Render(spin + "fetching " + what + "…")
 }
 
 // wordwrap breaks text on word boundaries at the given width.

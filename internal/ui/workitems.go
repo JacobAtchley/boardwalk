@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -80,6 +81,7 @@ type WorkItems struct {
 
 	status string
 	failed bool
+	work   work
 	now    func() time.Time
 
 	// branchPrompt is non-nil while the branch name is being edited.
@@ -98,6 +100,7 @@ func NewWorkItems(c *azdo.Client, items []azdo.WorkItem, mineOnly, includeClosed
 		mineOnly:      mineOnly,
 		includeClosed: includeClosed,
 		comments:      map[int][]azdo.Comment{},
+		work:          newWork(),
 		loading:       map[int]bool{},
 		discussionErr: map[int]bool{},
 		now:           time.Now,
@@ -137,13 +140,14 @@ func (m *WorkItems) Init() tea.Cmd {
 // fetchItems reads the project's work items off the UI goroutine.
 func (m *WorkItems) fetchItems() tea.Cmd {
 	client, includeClosed := m.client, m.includeClosed
-	return func() tea.Msg {
+	fetch := func() tea.Msg {
 		items, err := client.WorkItems(includeClosed)
 		if err != nil {
 			return ErrMsg{Err: fmt.Errorf("could not fetch work items: %w", err)}
 		}
 		return workItemsMsg{Items: items}
 	}
+	return tea.Batch(fetch, m.work.begin(1))
 }
 
 func (m *WorkItems) applyScope() {
@@ -179,25 +183,31 @@ func (m *WorkItems) fetchComments() tea.Cmd {
 	// the stale failure message while the new attempt is in flight.
 	delete(m.discussionErr, it.ID)
 	client, id := m.client, it.ID
-	return func() tea.Msg {
+	fetch := func() tea.Msg {
 		comments, err := client.Comments(id)
 		if err != nil {
 			return commentsErrMsg{ID: id, Err: fmt.Errorf("could not load the discussion for #%d: %w", id, err)}
 		}
 		return commentsMsg{ID: id, Comments: comments}
 	}
+	return tea.Batch(fetch, m.work.begin(1))
 }
 
 // Update handles input and fetch results. It satisfies View.
 func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		return m, m.work.tick(msg)
+
 	case workItemsMsg:
+		m.work.done()
 		m.setItems(msg.Items)
 		m.loaded = true
 		m.status, m.failed = "", false
 		return m, m.fetchComments()
 
 	case commentsMsg:
+		m.work.done()
 		delete(m.loading, msg.ID)
 		delete(m.discussionErr, msg.ID)
 		m.comments[msg.ID] = msg.Comments
@@ -207,6 +217,7 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 		return m, nil
 
 	case commentsErrMsg:
+		m.work.done()
 		delete(m.loading, msg.ID)
 		m.discussionErr[msg.ID] = true
 		m.status, m.failed = msg.Err.Error(), true
@@ -216,6 +227,7 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 		return m, nil
 
 	case ErrMsg:
+		m.work.done()
 		m.status, m.failed = msg.Err.Error(), true
 		return m, nil
 
@@ -396,7 +408,7 @@ func (m *WorkItems) setRowState(id int, state string) {
 func (m *WorkItems) Body(width, height int) string {
 	m.browser.SetSize(width, height)
 	if !m.loaded {
-		return placeholder("work items", m.status, m.failed)
+		return placeholder("work items", m.status, m.failed, m.work.View())
 	}
 	return m.browser.View()
 }
@@ -428,7 +440,7 @@ func (m *WorkItems) Status() (string, bool) {
 	if m.browser.Filtering() {
 		return m.browser.FilterView(), false
 	}
-	return m.status, m.failed
+	return m.work.View() + m.status, m.failed
 }
 
 // Prompting reports whether a text prompt is open, so Root leaves esc and q to

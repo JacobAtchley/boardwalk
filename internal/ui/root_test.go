@@ -326,7 +326,10 @@ func TestRootKeepsTheStatusLineForTheViewOnTop(t *testing.T) {
 	updated, _ = r.Update(PopMsg{})
 	r = updated.(*Root)
 
-	if status, _ := r.stack[0].Status(); status != "" {
+	// Asserted on the text rather than on the line being empty: a view that is
+	// still fetching carries a spinner in its status line, which is its own
+	// state and not something a hidden view was told.
+	if status, _ := r.stack[0].Status(); strings.Contains(status, "a status for the top view") {
 		t.Errorf("a hidden view took the status line: %q", status)
 	}
 }

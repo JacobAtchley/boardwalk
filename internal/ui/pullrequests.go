@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -114,6 +115,7 @@ type PullRequests struct {
 	loaded bool
 	status string
 	failed bool
+	work   work
 	now    func() time.Time
 }
 
@@ -125,6 +127,7 @@ func NewPullRequests(c *azdo.Client) *PullRequests {
 		client:  c,
 		browser: NewBrowser(),
 		counts:  map[int]azdo.ThreadCounts{},
+		work:    newWork(),
 		loading: map[int]bool{},
 		repo:    azdo.CurrentRepo(),
 		now:     time.Now,
@@ -139,13 +142,14 @@ func NewPullRequests(c *azdo.Client) *PullRequests {
 // Init fetches the project's active pull requests.
 func (m *PullRequests) Init() tea.Cmd {
 	client := m.client
-	return func() tea.Msg {
+	fetch := func() tea.Msg {
 		prs, err := client.PullRequests()
 		if err != nil {
 			return ErrMsg{Err: fmt.Errorf("could not fetch pull requests: %w", err)}
 		}
 		return prsMsg{PRs: prs}
 	}
+	return tea.Batch(fetch, m.work.begin(1))
 }
 
 // visible applies the draft filter and repository scope to the fetched batch.
@@ -212,13 +216,17 @@ func (m *PullRequests) fetchThreads() tea.Cmd {
 			return threadsMsg{PR: prID, Counts: counts, Err: err}
 		})
 	}
-	return tea.Batch(cmds...)
+	return tea.Batch(tea.Batch(cmds...), m.work.begin(len(cmds)))
 }
 
 // Update handles input and fetch results. It satisfies View.
 func (m *PullRequests) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		return m, m.work.tick(msg)
+
 	case prsMsg:
+		m.work.done()
 		m.prs, m.loaded = msg.PRs, true
 		m.applyFilters()
 		return m, m.fetchThreads()
@@ -226,6 +234,7 @@ func (m *PullRequests) Update(msg tea.Msg) (View, tea.Cmd) {
 	case threadsMsg:
 		// Cleared before the error check: a failed fetch must still allow a
 		// later selection to retry, rather than being stuck "loading…" forever.
+		m.work.done()
 		delete(m.loading, msg.PR)
 		if msg.Err != nil {
 			m.status, m.failed = fmt.Sprintf("could not load threads for !%d: %v", msg.PR, msg.Err), true
@@ -236,6 +245,7 @@ func (m *PullRequests) Update(msg tea.Msg) (View, tea.Cmd) {
 		return m, nil
 
 	case ErrMsg:
+		m.work.done()
 		m.status, m.failed = msg.Err.Error(), true
 		return m, nil
 
@@ -320,7 +330,7 @@ func (m *PullRequests) renderDetail(row Row, width int) string {
 func (m *PullRequests) Body(width, height int) string {
 	m.browser.SetSize(width, height)
 	if !m.loaded {
-		return placeholder("pull requests", m.status, m.failed)
+		return placeholder("pull requests", m.status, m.failed, m.work.View())
 	}
 	return m.browser.View()
 }
@@ -347,7 +357,7 @@ func (m *PullRequests) Status() (string, bool) {
 	if m.browser.Filtering() {
 		return m.browser.FilterView(), false
 	}
-	return m.status, m.failed
+	return m.work.View() + m.status, m.failed
 }
 
 // Prompting reports whether a text prompt is open, so Root leaves esc and q to
