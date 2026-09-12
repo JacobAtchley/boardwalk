@@ -6,12 +6,12 @@ link, or — for a work item — start a branch for it, all without leaving the
 shell.
 
 ```
- ██████╗  ██████╗  █████╗ ██████╗ ██████╗ ██╗    ██╗ █████╗ ██╗     ██╗  ██╗
- ██╔══██╗██╔═══██╗██╔══██╗██╔══██╗██╔══██╗██║    ██║██╔══██╗██║     ██║ ██╔╝
- ██████╔╝██║   ██║███████║██████╔╝██║  ██║██║ █╗ ██║███████║██║     █████╔╝
- ██╔══██╗██║   ██║██╔══██║██╔══██╗██║  ██║██║███╗██║██╔══██║██║     ██╔═██╗
- ██████╔╝╚██████╔╝██║  ██║██║  ██║██████╔╝╚███╔███╔╝██║  ██║███████╗██║  ██╗
- ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝  ╚══╝╚══╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝
+  ╔╗ ╔═╗╔═╗╦═╗╔╦╗╦ ╦╔═╗╦  ╦╔═
+  ╠╩╗║ ║╠═╣╠╦╝ ║║║║║╠═╣║  ╠╩╗
+  ╚═╝╚═╝╩ ╩╩╚══╩╝╚╩╝╩ ╩╩═╝╩ ╩
+ ═══╬══════╬══════╬══════╬════
+    ║      ║      ║      ║
+ ≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈
 
 ▸ work items       browse, branch and set state
   pull requests    drafts, branches, comments and age
@@ -125,6 +125,17 @@ is a key that is listed.
 `esc` never quits: it pops one level, and from a top-level view that is the
 menu. `q` quits from a top-level view and goes back from a drill-down. `^c`
 quits from anywhere, including while a prompt is open.
+
+A view that comes back with nothing says so over a pair of gulls, and names the
+filter that emptied it — "nothing waiting on your review" rather than a blank
+list that reads as a fetch that broke:
+
+```
+        ⌒v⌒            ⌒v⌒
+   ≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈
+
+      nothing waiting on your review
+```
 
 ### Work items
 

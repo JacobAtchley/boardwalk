@@ -371,3 +371,39 @@ func threadsResolved(resolved, unresolved int) []azdo.Thread {
 	}
 	return out
 }
+
+func TestPullRequestsEmptyStateNamesTheFilterThatEmptiedIt(t *testing.T) {
+	// Every one of these empties the list for a different reason, and the
+	// wrong explanation sends the user looking in the wrong place.
+	c := &azdo.Client{Org: "acme", Project: "Platform", Me: "dev@acme.test"}
+
+	for _, tc := range []struct {
+		name  string
+		setup func(*PullRequests)
+		want  string
+	}{
+		{"the project is quiet", func(*PullRequests) {}, "no pull requests open in this project"},
+		{"scoped to one repo", func(m *PullRequests) {
+			m.repoOnly, m.repo = true, "platform-api"
+		}, "no pull requests open in platform-api"},
+		{"waiting on my review", func(m *PullRequests) {
+			m.mineToReview, m.reviewGroups = true, []string{"platform-devs"}
+		}, "nothing waiting on your review"},
+		{"no review groups configured", func(m *PullRequests) {
+			m.mineToReview = true
+		}, "no review groups are configured"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewPullRequests(c, nil)
+			m.repoOnly = false
+			tc.setup(m)
+			updated, _ := m.Update(prsMsg{})
+			m = updated.(*PullRequests)
+
+			out := m.Body(160, 20)
+			if !strings.Contains(out, tc.want) {
+				t.Errorf("empty view is missing %q:\n%s", tc.want, out)
+			}
+		})
+	}
+}

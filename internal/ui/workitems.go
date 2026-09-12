@@ -344,7 +344,23 @@ func (m *WorkItems) Body(width, height int) string {
 	if !m.loaded {
 		return placeholder("work items", m.status, m.failed, m.work.View())
 	}
+	if m.browser.Len() == 0 {
+		return emptyState(m.emptyMessage(), width, height)
+	}
 	return m.browser.View()
+}
+
+// emptyMessage names what is missing. The scope matters: "nothing assigned to
+// you" and "no work items in this project" are very different pieces of news,
+// and the second one arriving when the first is true reads as a broken fetch.
+func (m *WorkItems) emptyMessage() string {
+	if m.mineOnly {
+		return "nothing assigned to you"
+	}
+	if !m.includeClosed {
+		return "no open work items in this project"
+	}
+	return "no work items in this project"
 }
 
 // Title reports the current scope and the project the items belong to.

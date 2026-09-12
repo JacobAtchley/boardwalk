@@ -163,3 +163,18 @@ func TestBuildsFailedFetchReplacesTheFetchingPlaceholder(t *testing.T) {
 		t.Errorf("the body does not say what went wrong:\n%s", got)
 	}
 }
+
+func TestBuildsEmptyStateSaysThereAreNoRuns(t *testing.T) {
+	c := &azdo.Client{Org: "acme", Project: "Platform"}
+	m := NewBuilds(c)
+	updated, _ := m.Update(buildsMsg{})
+	m = updated.(*Builds)
+
+	out := m.Body(160, 20)
+	if !strings.Contains(out, "no pipeline runs") {
+		t.Errorf("empty view is missing the message:\n%s", out)
+	}
+	if !strings.Contains(out, "⌒v⌒") {
+		t.Errorf("empty view did not draw the gulls:\n%s", out)
+	}
+}

@@ -364,7 +364,27 @@ func (m *PullRequests) Body(width, height int) string {
 	if !m.loaded {
 		return placeholder("pull requests", m.status, m.failed, m.work.View())
 	}
+	if m.browser.Len() == 0 {
+		return emptyState(m.emptyMessage(), width, height)
+	}
 	return m.browser.View()
+}
+
+// emptyMessage names what is missing, in the terms of whichever filter emptied
+// the list. An unconfigured review group empties it for a reason that is not
+// about the project at all, so that case says so rather than reporting a quiet
+// queue the user has no way to see into.
+func (m *PullRequests) emptyMessage() string {
+	switch {
+	case m.mineToReview && len(m.reviewGroups) == 0:
+		return "no review groups are configured, so nothing can match"
+	case m.mineToReview:
+		return "nothing waiting on your review"
+	case m.repoOnly && m.repo != "":
+		return "no pull requests open in " + m.repo
+	default:
+		return "no pull requests open in this project"
+	}
 }
 
 // Title reports the current filters and the project the pull requests belong
