@@ -12,7 +12,6 @@ import (
 var (
 	colDim    = lipgloss.AdaptiveColor{Light: "245", Dark: "241"}
 	colAccent = lipgloss.AdaptiveColor{Light: "27", Dark: "39"}
-	colLabel  = lipgloss.AdaptiveColor{Light: "240", Dark: "245"}
 	colOK     = lipgloss.AdaptiveColor{Light: "28", Dark: "42"}
 	colErr    = lipgloss.AdaptiveColor{Light: "160", Dark: "203"}
 	colWarn   = lipgloss.AdaptiveColor{Light: "130", Dark: "214"}
@@ -23,6 +22,32 @@ var (
 	// colAccent, which colours detail titles, so the things the eye should be
 	// drawn to share one colour and the things it should read share another.
 	colCoral = lipgloss.AdaptiveColor{Light: "#D2553C", Dark: "#FF7F50"}
+
+	// colLabel is every field name in a detail pane — repo, author, source — and
+	// the section headings between them. It was a mid grey, which on a dark
+	// terminal sat close enough to the background that the labels were harder
+	// to pick out than the values they name. A pastel purple is well clear of
+	// both the background and the values, and clear of the coral and blue the
+	// rest of the interface is built from, so the eye can skim the labels
+	// without them competing with the content.
+	//
+	// The light variant is the same hue taken down to where it carries on a
+	// pale terminal, the way colCoral's and colSand's do.
+	colLabel = lipgloss.AdaptiveColor{Light: "#6B4FA0", Dark: "#C9B5E8"}
+
+	// colWater is the sea under the pier on the landing screen and under the
+	// gulls on an empty view. It is the one cool colour on either, which is
+	// what makes the waterline read as a horizon.
+	colWater = lipgloss.AdaptiveColor{Light: "#2E7D9A", Dark: "#5FB3D4"}
+
+	// colSand is the pastel the empty state's message is set in: the sand under
+	// the boardwalk, and the warm complement of the water it sits below, so the
+	// one line the user has to read is the thing that pops off the pane.
+	//
+	// The light variant is not pastel, because a pastel on white is unreadable.
+	// It is the same hue taken down to where it still carries on a pale
+	// terminal, the way colCoral's two variants do.
+	colSand = lipgloss.AdaptiveColor{Light: "#9A6B2F", Dark: "#F6D8A0"}
 
 	chromeStyle = lipgloss.NewStyle().Foreground(colDim)
 	selectedRow = lipgloss.NewStyle().Foreground(colCoral).Bold(true)
@@ -35,6 +60,8 @@ var (
 	draftStyle  = lipgloss.NewStyle().Foreground(colDraft)
 	coralStyle  = lipgloss.NewStyle().Foreground(colCoral)
 	bannerRow   = lipgloss.NewStyle().Foreground(colCoral).Bold(true)
+	waterStyle  = lipgloss.NewStyle().Foreground(colWater)
+	sandStyle   = lipgloss.NewStyle().Foreground(colSand).Bold(true)
 	menuItem    = lipgloss.NewStyle().PaddingLeft(2)
 	menuPicked  = lipgloss.NewStyle().PaddingLeft(0).Foreground(colCoral).Bold(true)
 

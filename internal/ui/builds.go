@@ -290,6 +290,9 @@ func (m *Builds) Body(width, height int) string {
 	if !m.loaded {
 		return placeholder("builds", m.status, m.failed, m.work.View())
 	}
+	if m.browser.Len() == 0 {
+		return emptyState("no pipeline runs in this project", width, height)
+	}
 	return m.browser.View()
 }
 

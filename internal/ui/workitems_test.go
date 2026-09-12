@@ -290,3 +290,49 @@ func TestWorkItemsSummaryOmitsTheLongText(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkItemsEmptyStateSaysWhatIsMissing(t *testing.T) {
+	// A board with nothing on it and a fetch that broke both draw an empty
+	// list otherwise, and they want opposite reactions from the user.
+	c, _ := fixture()
+
+	for _, tc := range []struct {
+		name          string
+		mineOnly      bool
+		includeClosed bool
+		want          string
+	}{
+		{"everyone's open items", false, false, "no open work items"},
+		{"everyone's items with -all", false, true, "no work items in this project"},
+		{"just mine", true, false, "nothing assigned to you"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := sized(t, NewWorkItems(c, nil, tc.mineOnly, tc.includeClosed))
+			updated, _ := m.Update(workItemsMsg{})
+			m = updated.(*WorkItems)
+
+			out := body(t, m)
+			if !strings.Contains(out, tc.want) {
+				t.Errorf("empty view is missing %q:\n%s", tc.want, out)
+			}
+			if !strings.Contains(out, "⌒v⌒") {
+				t.Errorf("empty view did not draw the gulls:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestWorkItemsStillFetchingDoesNotDrawTheEmptyState(t *testing.T) {
+	// Before the batch lands there is nothing to say is missing — the list is
+	// empty because the fetch has not finished, which the spinner already says.
+	c, _ := fixture()
+	m := sized(t, NewWorkItems(c, nil, false, false))
+
+	out := body(t, m)
+	if strings.Contains(out, "⌒v⌒") {
+		t.Errorf("the empty state drew while the fetch was still in flight:\n%s", out)
+	}
+	if !strings.Contains(out, "fetching") {
+		t.Errorf("view = %q, want the fetching placeholder", out)
+	}
+}
