@@ -20,7 +20,7 @@ type work struct {
 func newWork() work {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
-	s.Style = chromeStyle
+	s.Style = coralStyle
 	return work{spinner: s}
 }
 

@@ -10,22 +10,22 @@ import (
 )
 
 var (
-	colDim      = lipgloss.AdaptiveColor{Light: "245", Dark: "241"}
-	colAccent   = lipgloss.AdaptiveColor{Light: "27", Dark: "39"}
-	colSelected = lipgloss.AdaptiveColor{Light: "27", Dark: "86"}
-	colLabel    = lipgloss.AdaptiveColor{Light: "240", Dark: "245"}
-	colOK       = lipgloss.AdaptiveColor{Light: "28", Dark: "42"}
-	colErr      = lipgloss.AdaptiveColor{Light: "160", Dark: "203"}
-	colWarn     = lipgloss.AdaptiveColor{Light: "130", Dark: "214"}
-	colDraft    = lipgloss.AdaptiveColor{Light: "97", Dark: "141"}
+	colDim    = lipgloss.AdaptiveColor{Light: "245", Dark: "241"}
+	colAccent = lipgloss.AdaptiveColor{Light: "27", Dark: "39"}
+	colLabel  = lipgloss.AdaptiveColor{Light: "240", Dark: "245"}
+	colOK     = lipgloss.AdaptiveColor{Light: "28", Dark: "42"}
+	colErr    = lipgloss.AdaptiveColor{Light: "160", Dark: "203"}
+	colWarn   = lipgloss.AdaptiveColor{Light: "130", Dark: "214"}
+	colDraft  = lipgloss.AdaptiveColor{Light: "97", Dark: "141"}
 
-	// colCoral belongs to the wordmark alone. It is deliberately not colAccent:
-	// the accent also colours every detail title, and the banner should be the
-	// one thing on screen wearing this colour.
+	// colCoral is boardwalk's accent: the wordmark, the selected row, the
+	// spinner, and the keys in the help line. It is kept separate from
+	// colAccent, which colours detail titles, so the things the eye should be
+	// drawn to share one colour and the things it should read share another.
 	colCoral = lipgloss.AdaptiveColor{Light: "#D2553C", Dark: "#FF7F50"}
 
 	chromeStyle = lipgloss.NewStyle().Foreground(colDim)
-	selectedRow = lipgloss.NewStyle().Foreground(colSelected).Bold(true)
+	selectedRow = lipgloss.NewStyle().Foreground(colCoral).Bold(true)
 	normalRow   = lipgloss.NewStyle()
 	detailTitle = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
 	labelStyle  = lipgloss.NewStyle().Foreground(colLabel)
@@ -33,9 +33,10 @@ var (
 	errStyle    = lipgloss.NewStyle().Foreground(colErr)
 	warnStyle   = lipgloss.NewStyle().Foreground(colWarn)
 	draftStyle  = lipgloss.NewStyle().Foreground(colDraft)
+	coralStyle  = lipgloss.NewStyle().Foreground(colCoral)
 	bannerRow   = lipgloss.NewStyle().Foreground(colCoral).Bold(true)
 	menuItem    = lipgloss.NewStyle().PaddingLeft(2)
-	menuPicked  = lipgloss.NewStyle().PaddingLeft(0).Foreground(colSelected).Bold(true)
+	menuPicked  = lipgloss.NewStyle().PaddingLeft(0).Foreground(colCoral).Bold(true)
 
 	detailPane = lipgloss.NewStyle().
 			BorderStyle(lipgloss.NormalBorder()).
@@ -144,10 +145,10 @@ func statusGlyph(s azdo.BuildStatus) string {
 // line reads as part of the frame rather than as content.
 func newHelp() help.Model {
 	h := help.New()
-	h.Styles.ShortKey = labelStyle
+	h.Styles.ShortKey = coralStyle
 	h.Styles.ShortDesc = chromeStyle
 	h.Styles.ShortSeparator = chromeStyle
-	h.Styles.FullKey = labelStyle
+	h.Styles.FullKey = coralStyle
 	h.Styles.FullDesc = chromeStyle
 	h.Styles.FullSeparator = chromeStyle
 	return h
