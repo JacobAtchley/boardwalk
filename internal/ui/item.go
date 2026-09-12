@@ -1,0 +1,344 @@
+package ui
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+// commentsMsg carries a fetched discussion. It names the work item it belongs
+// to because Root broadcasts data to every view in the stack, and a slow fetch
+// can land after the user has moved on.
+type commentsMsg struct {
+	ID       int
+	Comments []azdo.Comment
+}
+
+// commentsErrMsg is a discussion fetch that failed. It names its work item for
+// the same reason, and so the pane can say so honestly rather than reading
+// "loading…" forever.
+type commentsErrMsg struct {
+	ID  int
+	Err error
+}
+
+// linkedPRsMsg carries the pull requests a work item links to. It names its
+// work item because Root broadcasts data to every view in the stack.
+type linkedPRsMsg struct {
+	ID  int
+	PRs []azdo.PullRequest
+	Err error
+}
+
+// Item is one work item in full: every field, and the whole discussion.
+//
+// The list's side pane is a summary — enough to recognise a row while moving
+// through it — and this is what enter opens. Splitting them is what lets the
+// summary stay glanceable while the long text gets the room it needs.
+type Item struct {
+	client *azdo.Client
+	item   azdo.WorkItem
+
+	viewport viewport.Model
+	comments []azdo.Comment
+
+	// loaded separates "no comments" from "not fetched yet", which read the
+	// same in an empty slice.
+	loaded bool
+	failed bool
+
+	// linked are the pull requests this item is attached to — what the branch
+	// flow's link becomes once someone opens a pull request from that branch.
+	linked       []azdo.PullRequest
+	linkedLoaded bool
+	linkedErr    bool
+
+	// renderedAt is the width the pane was last laid out for. Glamour hard
+	// wraps, so a resize means rendering again rather than reflowing.
+	renderedAt int
+
+	status string
+	work   work
+	now    func() time.Time
+}
+
+// NewItem builds the view. comments is whatever the list already had cached,
+// which is usually nothing; Init fetches when it is empty.
+func NewItem(c *azdo.Client, wi azdo.WorkItem, comments []azdo.Comment) *Item {
+	return &Item{
+		client:   c,
+		item:     wi,
+		viewport: viewport.New(0, 0),
+		comments: comments,
+		loaded:   comments != nil,
+		work:     newWork(),
+		now:      time.Now,
+	}
+}
+
+// Init fetches what it does not already have. The two halves are independent:
+// the list hands over the discussion it cached but knows nothing about the
+// linked pull requests, so returning early on the discussion alone would leave
+// the links permanently unfetched.
+func (m *Item) Init() tea.Cmd {
+	var cmds []tea.Cmd
+	if !m.loaded {
+		cmds = append(cmds, m.fetchComments())
+	}
+	if !m.linkedLoaded {
+		cmds = append(cmds, m.fetchLinked())
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(tea.Batch(cmds...), m.work.begin(len(cmds)))
+}
+
+func (m *Item) fetchComments() tea.Cmd {
+	client, id := m.client, m.item.ID
+	return func() tea.Msg {
+		comments, err := client.Comments(id)
+		if err != nil {
+			return commentsErrMsg{ID: id, Err: fmt.Errorf("could not load the discussion for #%d: %w", id, err)}
+		}
+		return commentsMsg{ID: id, Comments: comments}
+	}
+}
+
+// fetchLinked resolves the work item's pull request links. The relations name
+// them but carry nothing else, so each one is fetched: the project-wide listing
+// only holds active pull requests, and a work item stays linked to its pull
+// request long after it merges.
+func (m *Item) fetchLinked() tea.Cmd {
+	client, id := m.client, m.item.ID
+	return func() tea.Msg {
+		refs, err := client.WorkItemPullRequests(id)
+		if err != nil {
+			return linkedPRsMsg{ID: id, Err: fmt.Errorf("could not load the pull requests for #%d: %w", id, err)}
+		}
+
+		prs := make([]azdo.PullRequest, 0, len(refs))
+		for _, ref := range refs {
+			pr, err := client.PullRequestByID(ref.RepoID, ref.ID)
+			if err != nil {
+				// One unreadable link should not cost the others; a deleted
+				// repository is enough to produce it.
+				continue
+			}
+			prs = append(prs, pr)
+		}
+		// Newest first, so the p key opens the one most likely to be current.
+		sort.SliceStable(prs, func(i, j int) bool { return prs[i].Created.After(prs[j].Created) })
+		return linkedPRsMsg{ID: id, PRs: prs}
+	}
+}
+
+func (m *Item) Update(msg tea.Msg) (View, tea.Cmd) {
+	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		return m, m.work.tick(msg)
+
+	case commentsMsg:
+		// Named by id: Root broadcasts data to every view in the stack, and the
+		// list this was opened from is still underneath asking for its own.
+		if msg.ID != m.item.ID {
+			return m, nil
+		}
+		m.work.done()
+		m.comments, m.loaded = msg.Comments, true
+		m.invalidate()
+		return m, nil
+
+	case commentsErrMsg:
+		if msg.ID != m.item.ID {
+			return m, nil
+		}
+		m.work.done()
+		m.failed, m.loaded = true, true
+		m.status = msg.Err.Error()
+		m.invalidate()
+		return m, nil
+
+	case linkedPRsMsg:
+		if msg.ID != m.item.ID {
+			return m, nil
+		}
+		m.work.done()
+		m.linkedLoaded = true
+		if msg.Err != nil {
+			m.linkedErr, m.status = true, msg.Err.Error()
+		} else {
+			m.linked = msg.PRs
+		}
+		m.invalidate()
+		return m, nil
+
+	case StatusMsg:
+		m.status = msg.Text
+		return m, nil
+
+	case tea.KeyMsg:
+		switch {
+		case key.Matches(msg, keyBack):
+			return m, func() tea.Msg { return PopMsg{} }
+		case key.Matches(msg, keyTop):
+			m.viewport.GotoTop()
+			return m, nil
+		case key.Matches(msg, keyBottom):
+			m.viewport.GotoBottom()
+			return m, nil
+		case key.Matches(msg, keyRefresh):
+			m.loaded, m.failed = false, false
+			m.linkedLoaded, m.linkedErr = false, false
+			return m, m.Init()
+		case key.Matches(msg, keyLinkedPR):
+			// The newest link: a work item that has been through more than one
+			// pull request is almost always asking about its latest.
+			if len(m.linked) == 0 {
+				m.status = "no pull requests are linked to this work item"
+				return m, nil
+			}
+			detail := NewPullRequestDetail(m.client, m.linked[0], nil)
+			return m, func() tea.Msg { return PushMsg{View: detail} }
+		}
+
+		if status, handled := SharedAction(itemRow{m.item, m.client.WorkItemURL(m.item.ID)}, msg); handled {
+			m.status = status.Text
+			return m, nil
+		}
+	}
+
+	var cmd tea.Cmd
+	m.viewport, cmd = m.viewport.Update(msg)
+	return m, cmd
+}
+
+// invalidate forces the next frame to lay the content out again.
+func (m *Item) invalidate() { m.renderedAt = 0 }
+
+func (m *Item) Body(width, height int) string {
+	m.viewport.Width, m.viewport.Height = width, height
+
+	if m.renderedAt != width {
+		// Hold the reader's place across a relayout, but open at the top. The
+		// log pane follows its tail because it is tailing; this is not, and an
+		// empty viewport reports itself at the bottom, so following would land
+		// the first frame at the end of the discussion instead of the title.
+		offset := m.viewport.YOffset
+		m.viewport.SetContent(m.render(width))
+		m.renderedAt = width
+		m.viewport.SetYOffset(offset)
+	}
+	return m.viewport.View()
+}
+
+// render lays the whole item out. The field list is rendered plainly — five
+// short values gain nothing from markdown — while the long text goes through
+// glamour, which is the reason it was converted from HTML in the first place.
+func (m *Item) render(width int) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "%s\n\n", detailTitle.Render(truncate(
+		fmt.Sprintf("#%d  %s", m.item.ID, m.item.Title), width)))
+
+	for _, field := range [][2]string{
+		{"type", m.item.Type},
+		{"state", m.item.State},
+		{"iteration", orDash(m.item.Iteration)},
+		{"tags", orDash(strings.ReplaceAll(m.item.Tags, "; ", ", "))},
+		{"assigned", m.item.Assigned},
+	} {
+		fmt.Fprintf(&b, "%s %s\n",
+			labelStyle.Render(fmt.Sprintf("%-10s", field[0]+":")),
+			truncate(field[1], width-11))
+	}
+
+	fmt.Fprintf(&b, "\n%s\n%s\n", labelStyle.Render("description"),
+		renderMarkdown(m.item.Description, "_no description_", width))
+	fmt.Fprintf(&b, "\n%s\n%s\n", labelStyle.Render("acceptance criteria"),
+		renderMarkdown(m.item.AcceptanceCriteria, "_none_", width))
+
+	m.renderLinked(&b, width)
+
+	fmt.Fprintf(&b, "\n%s\n", labelStyle.Render("discussion"))
+	switch {
+	case m.failed:
+		fmt.Fprintf(&b, "%s\n", errStyle.Render("could not load the discussion — press r to try again"))
+	case !m.loaded:
+		fmt.Fprintf(&b, "%s\n", chromeStyle.Render(m.work.View()+"loading…"))
+	case len(m.comments) == 0:
+		fmt.Fprintf(&b, "%s\n", chromeStyle.Render("(no comments)"))
+	default:
+		for _, c := range m.comments {
+			fmt.Fprintf(&b, "\n%s\n%s\n",
+				labelStyle.Render(fmt.Sprintf("%s · %s", c.Author, humanAge(c.Created, m.now()))),
+				renderMarkdown(c.Text, "_(empty)_", width))
+		}
+	}
+	return b.String()
+}
+
+// renderLinked writes the pull requests this item is attached to. It sits above
+// the discussion because it answers the question people open a work item to
+// ask: is anyone working on this, and did it ship.
+func (m *Item) renderLinked(b *strings.Builder, width int) {
+	fmt.Fprintf(b, "\n%s\n", labelStyle.Render("pull requests"))
+
+	switch {
+	case m.linkedErr:
+		fmt.Fprintf(b, "%s\n", errStyle.Render("could not load the links — press r to try again"))
+	case !m.linkedLoaded:
+		fmt.Fprintf(b, "%s\n", chromeStyle.Render(m.work.View()+"loading…"))
+	case len(m.linked) == 0:
+		fmt.Fprintf(b, "%s\n", chromeStyle.Render("(none linked)"))
+	default:
+		for i, pr := range m.linked {
+			marker := " "
+			if i == 0 {
+				marker = "▸" // what p opens
+			}
+			fmt.Fprintf(b, "%s %s\n", marker, truncate(fmt.Sprintf("!%d %s — %s → %s",
+				pr.ID, pr.Title, prStatusLabel(pr), shortRef(pr.Target)), width-2))
+		}
+		fmt.Fprintf(b, "%s\n", chromeStyle.Render("  p opens the first"))
+	}
+}
+
+func (m *Item) Title() string {
+	return fmt.Sprintf("#%d %s · %s/%s",
+		m.item.ID, m.item.Title, m.client.Org, m.client.Project)
+}
+
+// Keys omits the filter: there is nothing here to filter.
+func (m *Item) Keys() help.KeyMap {
+	own := []key.Binding{keyLinkedPR, keyTop, keyBottom, keyRefresh}
+	return keyMap{
+		short:  append(append([]key.Binding{}, own...), keyCopyID, keyBack, keyHelp),
+		groups: [][]key.Binding{own, {keyCopyID, keySlack, keyOpen}, navBindings()},
+	}
+}
+
+func (m *Item) Status() (string, bool) {
+	return m.work.View() + m.status, m.failed
+}
+
+// itemRow adapts the work item to the shared copy and open actions, which take
+// a Row so that every view names and links things the same way.
+type itemRow struct {
+	azdo.WorkItem
+	url string
+}
+
+func (r itemRow) FilterValue() string     { return "" }
+func (r itemRow) Render(width int) string { return "" }
+func (r itemRow) CopyID() string          { return fmt.Sprint(r.ID) }
+func (r itemRow) Label() string           { return fmt.Sprintf("#%d %s", r.ID, r.Title) }
+func (r itemRow) URL() string             { return r.url }

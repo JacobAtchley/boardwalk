@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -14,7 +15,8 @@ func fixture() (*azdo.Client, []azdo.WorkItem) {
 		{ID: 4021, Title: "Retry webhook delivery on 5xx", Type: "User Story", State: "Active",
 			Assigned: "Dev Example", AssignedKey: "dev@acme.test",
 			Tags: "webhooks; reliability", Iteration: `Platform\Sprint 42`,
-			Description: "Deliveries that fail with a 5xx should retry with exponential backoff rather than dropping on the floor."},
+			Description:        "Deliveries that fail with a 5xx should retry with exponential backoff rather than dropping on the floor.",
+			AcceptanceCriteria: "Retries three times with exponential backoff before giving up."},
 		{ID: 4020, Title: "Tidy up the settings page copy", Type: "Enhancement",
 			State: "Needs Refinement", Assigned: "(unassigned)"},
 		{ID: 3998, Title: "Cache tenant lookups", Type: "Feature", State: "Pending QA",
@@ -22,16 +24,27 @@ func fixture() (*azdo.Client, []azdo.WorkItem) {
 	}
 }
 
-func sized(t *testing.T, m WorkItems, w, h int) WorkItems {
+// testWidth and testHeight are the one terminal size the work item tests drive
+// at. body() used to paint at a height of its own, unrelated to the one the
+// view had been driven at, so a test could assert against a frame no sequence
+// of messages could actually have produced.
+const testWidth, testHeight = 120, 24
+
+func sized(t *testing.T, m *WorkItems) *WorkItems {
 	t.Helper()
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
-	return updated.(WorkItems)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: testWidth, Height: testHeight})
+	return updated.(*WorkItems)
 }
 
-func press(t *testing.T, m WorkItems, key tea.KeyMsg) (WorkItems, tea.Cmd) {
+func press(t *testing.T, m *WorkItems, key tea.KeyMsg) (*WorkItems, tea.Cmd) {
 	t.Helper()
 	updated, cmd := m.Update(key)
-	return updated.(WorkItems), cmd
+	return updated.(*WorkItems), cmd
+}
+
+func body(t *testing.T, m *WorkItems) string {
+	t.Helper()
+	return m.Body(testWidth, testHeight)
 }
 
 func runes(s string) tea.KeyMsg {
@@ -40,13 +53,20 @@ func runes(s string) tea.KeyMsg {
 
 func TestViewRendersListAndDetailSideBySide(t *testing.T) {
 	c, items := fixture()
-	out := sized(t, NewWorkItems(c, items, false), 120, 20).View()
+	m := sized(t, NewWorkItems(c, items, false, false))
+	out := body(t, m)
 	t.Logf("\n%s", out)
 
-	for _, want := range []string{"work items (all 3)", "acme/Platform", "4021", "Retry webhook delivery", "assigned", "^t mine/all"} {
+	for _, want := range []string{"4021", "Retry webhook delivery", "assigned"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("view is missing %q", want)
 		}
+	}
+	if !strings.Contains(m.Title(), "work items (all 3)") || !strings.Contains(m.Title(), "acme/Platform") {
+		t.Errorf("title = %q, missing expected pieces", m.Title())
+	}
+	if !strings.Contains(helpLine(m.Keys()), "^t scope") {
+		t.Errorf("help = %q, missing the scope toggle", helpLine(m.Keys()))
 	}
 
 	// The detail pane must sit beside the list, not beneath it: the first row
@@ -61,57 +81,42 @@ func TestViewRendersListAndDetailSideBySide(t *testing.T) {
 
 func TestToggleSwitchesScope(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 20)
-	if got := len(m.list.Items()); got != 3 {
-		t.Fatalf("all scope: got %d items, want 3", got)
+	m := sized(t, NewWorkItems(c, items, false, false))
+	if !strings.Contains(m.Title(), "all 3") {
+		t.Fatalf("title = %q, want all 3", m.Title())
 	}
 
 	m, _ = press(t, m, tea.KeyMsg{Type: tea.KeyCtrlT})
-	if got := len(m.list.Items()); got != 2 {
-		t.Fatalf("mine scope: got %d items, want 2", got)
-	}
-	if !strings.Contains(m.View(), "work items (mine 2)") {
+	if !strings.Contains(m.Title(), "mine 2") {
 		t.Error("header should report the mine scope")
 	}
 
 	m, _ = press(t, m, tea.KeyMsg{Type: tea.KeyCtrlT})
-	if got := len(m.list.Items()); got != 3 {
-		t.Fatalf("back to all: got %d items, want 3", got)
+	if !strings.Contains(m.Title(), "all 3") {
+		t.Error("back to all: want all 3")
 	}
 }
 
 func TestMineScopeStartsEmptyWhenIdentityUnknown(t *testing.T) {
 	_, items := fixture()
 	c := &azdo.Client{Org: "acme", Project: "Platform"} // az account show failed
-	m := sized(t, NewWorkItems(c, items, true), 120, 20)
+	m := sized(t, NewWorkItems(c, items, true, false))
 
-	if got := len(m.list.Items()); got != 0 {
-		t.Errorf("got %d items, want 0 — an empty identity must not match every item", got)
-	}
-}
-
-func TestBranchActionHandsACommandToTheShell(t *testing.T) {
-	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 20)
-
-	m, cmd := press(t, m, runes("b"))
-	if got, want := m.Command, "azdo-branch 4021"; got != want {
-		t.Errorf("Command = %q, want %q", got, want)
-	}
-	if cmd == nil {
-		t.Error("branch action should quit so the shell can run the command")
+	if !strings.Contains(m.Title(), "mine 0") {
+		t.Errorf("title = %q, want mine 0 — an empty identity must not match every item", m.Title())
 	}
 }
 
 func TestActionKeysAreInertWhileFiltering(t *testing.T) {
 	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false), 120, 20)
+	m := sized(t, NewWorkItems(c, items, false, false))
 
 	m, _ = press(t, m, runes("/"))
-	m, _ = press(t, m, runes("b"))
+	m, _ = press(t, m, runes("o"))
 
-	if m.Command != "" {
-		t.Error("typing 'b' into the filter must not trigger the branch action")
+	status, isErr := m.Status()
+	if strings.Contains(status, "opened") || isErr {
+		t.Error("typing 'o' into the filter must not trigger the open action")
 	}
 }
 
@@ -137,5 +142,151 @@ func TestWordwrapBreaksOnWords(t *testing.T) {
 	want := "one two\nthree\nfour"
 	if got != want {
 		t.Errorf("wordwrap = %q, want %q", got, want)
+	}
+}
+
+func TestWorkItemsToggleSwitchesScope(t *testing.T) {
+	c, items := fixture()
+	m := sized(t, NewWorkItems(c, items, false, false))
+
+	if !strings.Contains(m.Title(), "all 3") {
+		t.Errorf("title = %q, want the full count", m.Title())
+	}
+	m, _ = press(t, m, tea.KeyMsg{Type: tea.KeyCtrlT})
+	if !strings.Contains(m.Title(), "mine 2") {
+		t.Errorf("title = %q, want the mine count", m.Title())
+	}
+}
+
+func TestWorkItemsErrorGoesToTheStatusLine(t *testing.T) {
+	c, items := fixture()
+	m := sized(t, NewWorkItems(c, items, false, false))
+
+	updated, _ := m.Update(ErrMsg{Err: errors.New("no network")})
+	m = updated.(*WorkItems)
+
+	text, isErr := m.Status()
+	if !isErr || !strings.Contains(text, "no network") {
+		t.Errorf("status = %q, isErr = %v; want the error reported", text, isErr)
+	}
+	// The list must survive the failure.
+	if !strings.Contains(body(t, m), "Retry webhook delivery") {
+		t.Error("the rows were lost when a fetch failed")
+	}
+}
+
+func TestWorkItemsFetchesOnEntryWhenItHasNoItems(t *testing.T) {
+	// The spec's Loading section: views fetch on entry through a command, so
+	// the menu paints immediately and a failure reaches the status line rather
+	// than exiting the program before the TUI ever starts.
+	c, _ := fixture()
+	m := NewWorkItems(c, nil, false, false)
+
+	if cmd := m.Init(); cmd == nil {
+		t.Fatal("a view with no items did not fetch on entry")
+	}
+	if got := m.Body(testWidth, testHeight); !strings.Contains(got, "fetching work items") {
+		t.Errorf("expected the fetching placeholder before the items land, got:\n%s", got)
+	}
+	if strings.Contains(m.Title(), "all 0") {
+		t.Errorf("title = %q — a view that has not fetched yet must not claim the project is empty", m.Title())
+	}
+}
+
+func TestWorkItemsRendersItemsThatArriveFromItsOwnFetch(t *testing.T) {
+	c, items := fixture()
+	m := NewWorkItems(c, nil, false, false)
+
+	updated, _ := m.Update(workItemsMsg{Items: items})
+	m = updated.(*WorkItems)
+
+	if !strings.Contains(body(t, m), "Retry webhook delivery") {
+		t.Errorf("the fetched items did not reach the list:\n%s", body(t, m))
+	}
+	if !strings.Contains(m.Title(), "all 3") {
+		t.Errorf("title = %q, want the fetched count", m.Title())
+	}
+}
+
+func TestWorkItemsBuiltWithItemsDoesNotRefetchThem(t *testing.T) {
+	// -dump's path and the tests hand the view a batch that is already
+	// fetched; entering it must not ask for the project all over again.
+	c, items := fixture()
+	m := NewWorkItems(c, items, false, false)
+
+	if got := m.Body(testWidth, testHeight); strings.Contains(got, "fetching work items") {
+		t.Errorf("a view built with items showed the fetching placeholder:\n%s", got)
+	}
+	if cmd := m.Init(); cmd != nil {
+		t.Error("a view built with items fetched anyway")
+	}
+}
+
+func TestWorkItemsFailedFetchReplacesTheFetchingPlaceholder(t *testing.T) {
+	c, _ := fixture()
+	m := NewWorkItems(c, nil, false, false)
+
+	updated, _ := m.Update(ErrMsg{Err: errTest})
+	m = updated.(*WorkItems)
+
+	got := m.Body(testWidth, testHeight)
+	if strings.Contains(got, "fetching work items") {
+		t.Errorf("the body still claims to be fetching after the fetch failed:\n%s", got)
+	}
+	if !strings.Contains(got, errTest.Error()) {
+		t.Errorf("the body does not say what went wrong:\n%s", got)
+	}
+}
+
+func TestWorkItemsRefetchesOnR(t *testing.T) {
+	c, items := fixture()
+	m := sized(t, NewWorkItems(c, items, false, false))
+
+	m, cmd := press(t, m, runes("r"))
+	if cmd == nil {
+		t.Fatal("r did not refetch the work items")
+	}
+	if status, isErr := m.Status(); isErr || !strings.Contains(status, "refresh") {
+		t.Errorf("status = %q, isErr = %v; want the refresh reported", status, isErr)
+	}
+	if !strings.Contains(helpLine(m.Keys()), "r refresh") {
+		t.Errorf("help = %q, want the refresh key offered", helpLine(m.Keys()))
+	}
+}
+
+func TestWorkItemsEnterOpensTheFullItem(t *testing.T) {
+	c, items := fixture()
+	m := NewWorkItems(c, items, false, false)
+	m.Body(testWidth, testHeight)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter produced no command")
+	}
+	push, ok := cmd().(PushMsg)
+	if !ok {
+		t.Fatalf("enter produced %T, want a PushMsg", cmd())
+	}
+	if !strings.Contains(push.View.Title(), "#4021") {
+		t.Errorf("pushed view = %q, want the selected work item", push.View.Title())
+	}
+}
+
+func TestWorkItemsSummaryOmitsTheLongText(t *testing.T) {
+	// The long text is what enter is for; repeating it here costs the room the
+	// five identifying fields need.
+	c, items := fixture()
+	m := NewWorkItems(c, items, false, false)
+	view := m.Body(testWidth, testHeight)
+
+	for _, want := range []string{"#4021", "assigned:", "tags:", "iteration:", "enter for the full item"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the summary is missing %q:\n%s", want, view)
+		}
+	}
+	for _, gone := range []string{"description", "acceptance criteria", "discussion"} {
+		if strings.Contains(view, gone) {
+			t.Errorf("the summary still carries %q, which belongs to the full item:\n%s", gone, view)
+		}
 	}
 }

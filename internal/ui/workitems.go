@@ -3,286 +3,369 @@ package ui
 
 import (
 	"fmt"
-	"io"
-	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
-// item adapts a work item to the list widget. FilterValue is what the fuzzy
-// matcher sees, so it spans id, type, state, assignee and title — typing
-// "25701" or "atchley defect" both land.
-type item struct{ azdo.WorkItem }
-
-func (i item) FilterValue() string {
-	return fmt.Sprintf("%d %s %s %s %s", i.ID, i.Type, i.State, i.Assigned, i.Title)
+// workItemRow adapts a work item to the browser. FilterValue spans id, type,
+// state, assignee and title, so typing "25701" or "atchley defect" both land.
+type workItemRow struct {
+	azdo.WorkItem
+	url string
 }
 
-type itemDelegate struct{ width int }
-
-func (d itemDelegate) Height() int                         { return 1 }
-func (d itemDelegate) Spacing() int                        { return 0 }
-func (d itemDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
-
-func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
-	it, ok := listItem.(item)
-	if !ok {
-		return
-	}
-
-	row := fmt.Sprintf("%-7d %-14s %-16s %-18s %s",
-		it.ID,
-		truncate("["+it.Type+"]", 14),
-		truncate(it.State, 16),
-		truncate(it.Assigned, 18),
-		it.Title)
-	row = truncate(row, d.width)
-
-	if index == m.Index() {
-		fmt.Fprint(w, selectedRow.Render("▸ "+row))
-		return
-	}
-	fmt.Fprint(w, normalRow.Render("  "+row))
+func (r workItemRow) FilterValue() string {
+	return fmt.Sprintf("%d %s %s %s %s", r.ID, r.Type, r.State, r.Assigned, r.Title)
 }
 
-type keymap struct {
-	toggle key.Binding
-	open   key.Binding
-	copyID key.Binding
-	slack  key.Binding
-	branch key.Binding
-	quit   key.Binding
+func (r workItemRow) Render(width int) string {
+	return truncate(fmt.Sprintf("%-7d %-14s %-16s %-18s %s",
+		r.ID,
+		truncate("["+r.Type+"]", 14),
+		truncate(r.State, 16),
+		truncate(r.Assigned, 18),
+		r.Title), width)
 }
 
-var keys = keymap{
-	toggle: key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("^t", "mine/all")),
-	open:   key.NewBinding(key.WithKeys("ctrl+o", "o"), key.WithHelp("o", "open")),
-	copyID: key.NewBinding(key.WithKeys("ctrl+y", "y"), key.WithHelp("y", "copy id")),
-	slack:  key.NewBinding(key.WithKeys("ctrl+s", "s"), key.WithHelp("s", "slack")),
-	branch: key.NewBinding(key.WithKeys("ctrl+b", "b"), key.WithHelp("b", "branch")),
-	quit:   key.NewBinding(key.WithKeys("q", "esc", "ctrl+c"), key.WithHelp("q", "quit")),
-}
+func (r workItemRow) CopyID() string { return fmt.Sprint(r.ID) }
+func (r workItemRow) Label() string  { return fmt.Sprintf("#%d %s", r.ID, r.Title) }
+func (r workItemRow) URL() string    { return r.url }
+
+// workItemsMsg carries the project's work items, fetched when the view is
+// entered rather than before the program starts.
+type workItemsMsg struct{ Items []azdo.WorkItem }
 
 // WorkItems is the work item browser.
 type WorkItems struct {
-	client *azdo.Client
-	list   list.Model
-	detail viewport.Model
+	client  *azdo.Client
+	browser Browser
 
-	all      []item
-	mine     []item
+	all      []Row
+	mine     []Row
 	mineOnly bool
 
-	width, height int
-	status        string
+	// includeClosed is the -all scope, kept so a refresh — and the fetch on
+	// entry — asks for the same set the view was opened with.
+	includeClosed bool
 
-	// Command is set when the user picks an action that has to run in the
-	// parent shell. A child process can neither change the shell's directory
-	// nor drive its line editor, so the command is printed on exit instead.
-	Command string
+	// loaded is false until a batch has landed, whether handed to the
+	// constructor or fetched on entry, so the body can say which it is.
+	loaded bool
+
+	status string
+	failed bool
+	work   work
+	now    func() time.Time
+
+	// branchPrompt is non-nil while the branch name is being edited.
+	branchPrompt *textinput.Model
 }
 
-func NewWorkItems(c *azdo.Client, items []azdo.WorkItem, mineOnly bool) WorkItems {
-	var all, mine []item
-	for _, wi := range items {
-		it := item{wi}
-		all = append(all, it)
-		if c.Me != "" && it.AssignedKey == c.Me {
-			mine = append(mine, it)
-		}
+// NewWorkItems builds the work item browser. items may be empty, which means
+// "fetch on entry" — the ordinary path now that the program no longer fetches
+// before the TUI starts. -dump still fetches synchronously and hands the batch
+// over here, and so do the tests. includeClosed mirrors the -all flag, so a
+// fetch this view runs itself asks for the same scope.
+func NewWorkItems(c *azdo.Client, items []azdo.WorkItem, mineOnly, includeClosed bool) *WorkItems {
+	m := &WorkItems{
+		client:        c,
+		browser:       NewBrowser(),
+		mineOnly:      mineOnly,
+		includeClosed: includeClosed,
+		work:          newWork(),
+		now:           time.Now,
 	}
 
-	l := list.New(nil, itemDelegate{width: 80}, 0, 0)
-	// The list keeps a title-bar row for the filter prompt even with the title
-	// hidden, which would push the rows a line below the detail pane. The
-	// filter input is rendered on boardwalk's own status line instead.
-	l.SetShowTitle(false)
-	l.SetShowFilter(false)
-	l.Styles.TitleBar = lipgloss.NewStyle()
-	l.SetShowStatusBar(false)
-	l.SetShowHelp(false)
-	l.SetFilteringEnabled(true)
-	l.InfiniteScrolling = false
-
-	m := WorkItems{
-		client:   c,
-		list:     l,
-		detail:   viewport.New(0, 0),
-		all:      all,
-		mine:     mine,
-		mineOnly: mineOnly,
-	}
-	m.applyScope()
+	m.browser.Detail = m.renderDetail
+	m.setItems(items)
+	m.loaded = len(items) > 0
 	return m
 }
 
-func (m *WorkItems) applyScope() {
-	src := m.all
-	if m.mineOnly {
-		src = m.mine
+// setItems splits the caller's own items out of the batch up front, so
+// toggling scope is instant.
+func (m *WorkItems) setItems(items []azdo.WorkItem) {
+	m.all, m.mine = nil, nil
+	for _, wi := range items {
+		row := workItemRow{wi, m.client.WorkItemURL(wi.ID)}
+		m.all = append(m.all, row)
+		if m.client.Me != "" && wi.AssignedKey == m.client.Me {
+			m.mine = append(m.mine, row)
+		}
 	}
-	items := make([]list.Item, len(src))
-	for i, it := range src {
-		items[i] = it
-	}
-	m.list.SetItems(items)
+	m.applyScope()
 }
 
-func (m WorkItems) Init() tea.Cmd { return nil }
+// Init fetches the project's work items when the view has none, and otherwise
+// asks for the selected item's discussion. Root calls it when the view is
+// pushed, so the menu paints without waiting on the network and a failed fetch
+// lands on the status line instead of exiting the program.
+func (m *WorkItems) Init() tea.Cmd {
+	if !m.loaded {
+		return m.fetchItems()
+	}
+	return nil
+}
 
-func (m *WorkItems) selected() (item, bool) {
-	it, ok := m.list.SelectedItem().(item)
+// fetchItems reads the project's work items off the UI goroutine.
+func (m *WorkItems) fetchItems() tea.Cmd {
+	client, includeClosed := m.client, m.includeClosed
+	fetch := func() tea.Msg {
+		items, err := client.WorkItems(includeClosed)
+		if err != nil {
+			return ErrMsg{Err: fmt.Errorf("could not fetch work items: %w", err)}
+		}
+		return workItemsMsg{Items: items}
+	}
+	return tea.Batch(fetch, m.work.begin(1))
+}
+
+func (m *WorkItems) applyScope() {
+	rows := m.all
+	if m.mineOnly {
+		rows = m.mine
+	}
+	m.browser.SetRows(rows)
+}
+
+func (m *WorkItems) selected() (workItemRow, bool) {
+	row, ok := m.browser.Selected()
+	if !ok {
+		return workItemRow{}, false
+	}
+	it, ok := row.(workItemRow)
 	return it, ok
 }
 
-func (m WorkItems) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+// Update handles input and fetch results. It satisfies View.
+func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		listWidth := msg.Width * 3 / 5
-		detailWidth := msg.Width - listWidth - 4
-		body := msg.Height - 3 // header, hints, status
+	case spinner.TickMsg:
+		return m, m.work.tick(msg)
 
-		m.list.SetSize(listWidth, body)
-		m.list.SetDelegate(itemDelegate{width: listWidth - 2})
-		m.detail.Width = detailWidth
-		m.detail.Height = body
-		m.renderDetail()
+	case workItemsMsg:
+		m.work.done()
+		m.setItems(msg.Items)
+		m.loaded = true
+		m.status, m.failed = "", false
+		return m, nil
+
+	case ErrMsg:
+		m.work.done()
+		m.status, m.failed = msg.Err.Error(), true
+		return m, nil
+
+	case StatusMsg:
+		m.status, m.failed = msg.Text, msg.Err
+		return m, nil
+
+	case branchDoneMsg:
+		// The state change is real on the server whenever it landed, even if
+		// a later step (the link) then failed — so the row is synced off the
+		// Activated flag, not off whether the whole flow succeeded.
+		if msg.Activated {
+			m.setRowState(msg.ID, "Active")
+		}
+		if msg.Err != nil {
+			m.failed = true
+			m.status = msg.Err.Error()
+			if len(msg.Steps) > 0 {
+				m.status = strings.Join(msg.Steps, ", ") + "; then " + msg.Err.Error()
+			}
+			return m, nil
+		}
+		m.status, m.failed = strings.Join(msg.Steps, " · "), false
+		// The shell has to do the checkout: a child process cannot move its
+		// parent's working tree.
+		return m, func() tea.Msg {
+			return ShellCommandMsg{Command: fmt.Sprintf("git fetch origin && git checkout %s", msg.Branch)}
+		}
+
+	case stateSetMsg:
+		if msg.Err != nil {
+			m.status, m.failed = msg.Err.Error(), true
+			return m, nil
+		}
+		m.setRowState(msg.ID, msg.State)
+		m.status, m.failed = fmt.Sprintf("#%d is now %s", msg.ID, msg.State), false
 		return m, nil
 
 	case tea.KeyMsg:
+		// The branch prompt owns every key while it is open, including esc
+		// and the letters that are otherwise actions — typing "o" into it
+		// must add the letter, not open a browser.
+		if m.branchPrompt != nil {
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.branchPrompt = nil
+				m.status, m.failed = "", false
+				return m, nil
+			case tea.KeyEnter:
+				branch := strings.TrimSpace(m.branchPrompt.Value())
+				m.branchPrompt = nil
+				it, ok := m.selected()
+				if !ok || branch == "" {
+					return m, nil
+				}
+				m.status, m.failed = "creating "+branch+"…", false
+				return m, branchCmd(m.client, it.ID, branch)
+			}
+			input, cmd := m.branchPrompt.Update(msg)
+			m.branchPrompt = &input
+			return m, cmd
+		}
+
 		// While the filter prompt is open every key belongs to it, or typing
 		// "o" would open a browser instead of entering a letter.
-		if m.list.FilterState() == list.Filtering {
+		if m.browser.Filtering() {
 			break
 		}
 
-		switch {
-		case key.Matches(msg, keys.toggle):
+		if it, ok := m.selected(); ok {
+			if status, handled := SharedAction(it, msg); handled {
+				m.status, m.failed = status.Text, status.Err
+				return m, nil
+			}
+		}
+
+		switch msg.String() {
+		case "ctrl+t":
 			m.mineOnly = !m.mineOnly
 			m.applyScope()
-			m.renderDetail()
 			return m, nil
 
-		case key.Matches(msg, keys.open):
+		case "enter":
 			if it, ok := m.selected(); ok {
-				openBrowser(m.client.WorkItemURL(it.ID))
-				m.status = fmt.Sprintf("opened #%d", it.ID)
+				item := NewItem(m.client, it.WorkItem, nil)
+				return m, func() tea.Msg { return PushMsg{View: item} }
 			}
 			return m, nil
 
-		case key.Matches(msg, keys.copyID):
+		case "a":
 			if it, ok := m.selected(); ok {
-				copyToClipboard(fmt.Sprint(it.ID))
-				m.status = fmt.Sprintf("copied id %d", it.ID)
+				m.status, m.failed = fmt.Sprintf("setting #%d Active…", it.ID), false
+				return m, stateCmd(m.client, it.ID, "Active")
 			}
 			return m, nil
 
-		case key.Matches(msg, keys.slack):
-			if it, ok := m.selected(); ok {
-				copyToClipboard(SlackLink(fmt.Sprintf("#%d %s", it.ID, it.Title), m.client.WorkItemURL(it.ID)))
-				m.status = fmt.Sprintf("copied Slack link for #%d", it.ID)
-			}
-			return m, nil
+		case "r":
+			m.status, m.failed = "refreshing…", false
+			return m, m.fetchItems()
 
-		case key.Matches(msg, keys.branch):
-			if it, ok := m.selected(); ok {
-				m.Command = fmt.Sprintf("azdo-branch %d", it.ID)
-				return m, tea.Quit
+		case "b":
+			it, ok := m.selected()
+			if !ok {
+				return m, nil
 			}
-			return m, nil
-
-		case key.Matches(msg, keys.quit):
-			return m, tea.Quit
+			input := textinput.New()
+			input.Prompt = "branch: "
+			input.SetValue(branchName(it.Type, it.ID, it.Title))
+			input.CursorEnd()
+			input.Focus()
+			m.branchPrompt = &input
+			return m, textinput.Blink
 		}
 	}
 
-	before := m.list.Index()
-	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
-	if m.list.Index() != before {
-		m.renderDetail()
-	}
+	cmd := m.browser.Update(msg)
 	return m, cmd
 }
 
-func (m *WorkItems) renderDetail() {
-	it, ok := m.selected()
+// renderDetail is a summary, not the item. It carries what identifies a row
+// while the cursor moves over it; the description, the acceptance criteria and
+// the discussion need room to be readable and live behind enter, in Item.
+func (m *WorkItems) renderDetail(row Row, width int) string {
+	it, ok := row.(workItemRow)
 	if !ok {
-		m.detail.SetContent("")
-		return
+		return ""
 	}
 
-	width := max(20, m.detail.Width-2)
-
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\n", detailTitle.Render(truncate(fmt.Sprintf("#%d  %s", it.ID, it.Title), width)))
-	for _, row := range [][2]string{
-		{"type", it.Type},
-		{"state", it.State},
+	fmt.Fprintf(&b, "%s\n\n", detailTitle.Render(truncate(it.Label(), width)))
+	for _, field := range [][2]string{
 		{"assigned", it.Assigned},
 		{"tags", orDash(strings.ReplaceAll(it.Tags, "; ", ", "))},
 		{"iteration", orDash(it.Iteration)},
 	} {
-		label := labelStyle.Render(fmt.Sprintf("%-10s", row[0]+":"))
-		fmt.Fprintf(&b, "%s %s\n", label, truncate(row[1], width-11))
+		fmt.Fprintf(&b, "%s %s\n",
+			labelStyle.Render(fmt.Sprintf("%-10s", field[0]+":")),
+			truncate(field[1], width-11))
 	}
 
-	desc := it.Description
-	if desc == "" {
-		desc = "(no description)"
-	}
-	fmt.Fprintf(&b, "\n%s\n", wordwrap(desc, width))
-
-	m.detail.SetContent(b.String())
-	m.detail.GotoTop()
+	fmt.Fprintf(&b, "\n%s\n", chromeStyle.Render("enter for the full item"))
+	return b.String()
 }
 
-func (m WorkItems) View() string {
-	if m.width == 0 {
-		return "loading…"
+// section writes a titled block, or a placeholder when the field is empty.
+func section(b *strings.Builder, title, text, empty string, width int) {
+	if strings.TrimSpace(text) == "" {
+		text = empty
 	}
+	fmt.Fprintf(b, "\n%s\n%s\n", labelStyle.Render(title), wordwrap(text, width))
+}
 
+// setRowState rewrites a row in place after a successful state change, so the
+// list agrees with the server without refetching the project.
+func (m *WorkItems) setRowState(id int, state string) {
+	for _, set := range [][]Row{m.all, m.mine} {
+		for i, row := range set {
+			if it, ok := row.(workItemRow); ok && it.ID == id {
+				it.State = state
+				set[i] = it
+			}
+		}
+	}
+	m.applyScope()
+	m.browser.RefreshDetail()
+}
+
+// Body renders the browser at the size Root has left for it.
+func (m *WorkItems) Body(width, height int) string {
+	m.browser.SetSize(width, height)
+	if !m.loaded {
+		return placeholder("work items", m.status, m.failed, m.work.View())
+	}
+	return m.browser.View()
+}
+
+// Title reports the current scope and the project the items belong to.
+func (m *WorkItems) Title() string {
+	if !m.loaded {
+		return fmt.Sprintf("work items (fetching) · %s/%s", m.client.Org, m.client.Project)
+	}
 	scope := fmt.Sprintf("all %d", len(m.all))
 	if m.mineOnly {
 		scope = fmt.Sprintf("mine %d", len(m.mine))
 	}
-	header := chromeStyle.Render(fmt.Sprintf("work items (%s) · %s/%s", scope, m.client.Org, m.client.Project))
-	hints := chromeStyle.Render("^t mine/all · / filter · o open · y copy id · s slack · b branch · q quit")
+	return fmt.Sprintf("work items (%s) · %s/%s", scope, m.client.Org, m.client.Project)
+}
 
-	body := lipgloss.JoinHorizontal(lipgloss.Top,
-		m.list.View(),
-		detailPane.Render(m.detail.View()),
-	)
+// Hints is the key line at the bottom.
+func (m *WorkItems) Keys() help.KeyMap {
+	return listKeys(keyItem, keyScope, keyActive, keyBranch)
+}
 
-	status := statusStyle.Render(m.status)
-	if m.list.FilterState() == list.Filtering {
-		status = m.list.FilterInput.View()
+// Status is the transient status line, or a prompt while one is open: the
+// branch prompt takes priority over the fuzzy filter since only one of the
+// two can be open at a time.
+func (m *WorkItems) Status() (string, bool) {
+	if m.branchPrompt != nil {
+		return m.branchPrompt.View(), false
 	}
-
-	return strings.Join([]string{header, body, hints, status}, "\n")
+	if m.browser.Filtering() {
+		return m.browser.FilterView(), false
+	}
+	return m.work.View() + m.status, m.failed
 }
 
-// SlackLink renders a markdown link, which Slack's composer turns into a real
-// link on paste. Square brackets in the title would end the link text early, so
-// they become parentheses.
-func SlackLink(title, url string) string {
-	title = strings.NewReplacer("[", "(", "]", ")", "\n", " ", "\r", " ").Replace(title)
-	return fmt.Sprintf("[%s](%s)", strings.TrimSpace(title), url)
-}
-
-func copyToClipboard(s string) error {
-	cmd := exec.Command("pbcopy")
-	cmd.Stdin = strings.NewReader(s)
-	return cmd.Run()
-}
-
-func openBrowser(url string) error {
-	return exec.Command("open", url).Start()
+// Prompting reports whether a text prompt is open, so Root leaves esc and q to
+// the prompt rather than treating them as navigation.
+func (m *WorkItems) Prompting() bool {
+	return m.branchPrompt != nil || m.browser.Filtering()
 }
