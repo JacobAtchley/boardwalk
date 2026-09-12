@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/JacobAtchley/boardwalk/internal/config"
 	"github.com/JacobAtchley/boardwalk/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -148,7 +149,14 @@ func run(start string, mineOnly, all, dump, timing bool) error {
 		return nil
 	}
 
-	root := ui.NewRoot(client, mineOnly, all, start)
+	// The config is optional and only ever adds to what boardwalk knows, so a
+	// malformed one is worth reporting but not worth refusing to start over.
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "✗ %v\n", err)
+	}
+
+	root := ui.NewRoot(client, mineOnly, all, cfg.ReviewGroups, start)
 	final, err := tea.NewProgram(root, tea.WithAltScreen()).Run()
 	if err != nil {
 		return err

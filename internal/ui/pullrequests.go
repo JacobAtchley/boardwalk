@@ -113,6 +113,13 @@ type PullRequests struct {
 	repo     string // the working directory's repository, if it is one
 	repoOnly bool
 
+	// reviewGroups are the teams and security groups the user belongs to, from
+	// the config file. A pull request can name a group as its reviewer instead
+	// of a person, and the payload does not say who is in it.
+	reviewGroups []string
+	// mineToReview narrows the list to pull requests waiting on this user.
+	mineToReview bool
+
 	loaded bool
 	status string
 	failed bool
@@ -123,15 +130,16 @@ type PullRequests struct {
 // NewPullRequests builds the pull request browser. It fetches nothing itself —
 // Init does that — so it can be constructed before the client is ready to talk
 // to the network in a test.
-func NewPullRequests(c *azdo.Client) *PullRequests {
+func NewPullRequests(c *azdo.Client, reviewGroups []string) *PullRequests {
 	m := &PullRequests{
-		client:  c,
-		browser: NewBrowser(),
-		counts:  map[int]azdo.ThreadCounts{},
-		work:    newWork(),
-		loading: map[int]bool{},
-		repo:    azdo.CurrentRepo(),
-		now:     time.Now,
+		client:       c,
+		reviewGroups: reviewGroups,
+		browser:      NewBrowser(),
+		counts:       map[int]azdo.ThreadCounts{},
+		work:         newWork(),
+		loading:      map[int]bool{},
+		repo:         azdo.CurrentRepo(),
+		now:          time.Now,
 	}
 	// Starting narrow when boardwalk is run inside a repository matches what
 	// the user is looking at; ^t widens.
@@ -161,6 +169,9 @@ func (m *PullRequests) visible() []azdo.PullRequest {
 			continue
 		}
 		if m.repoOnly && m.repo != "" && pr.Repo != m.repo {
+			continue
+		}
+		if m.mineToReview && !azdo.NeedsReviewFrom(pr, m.client.Me, m.reviewGroups) {
 			continue
 		}
 		out = append(out, pr)
@@ -271,6 +282,11 @@ func (m *PullRequests) Update(msg tea.Msg) (View, tea.Cmd) {
 			m.drafts = (m.drafts + 1) % 3
 			m.applyFilters()
 			return m, m.fetchThreads()
+		case "v":
+			m.mineToReview = !m.mineToReview
+			m.applyFilters()
+			return m, m.fetchThreads()
+
 		case "ctrl+t":
 			m.repoOnly = !m.repoOnly
 			m.applyFilters()
@@ -343,13 +359,23 @@ func (m *PullRequests) Title() string {
 	if m.repoOnly && m.repo != "" {
 		scope = m.repo
 	}
-	return fmt.Sprintf("pull requests (%d · %s · %s) · %s/%s",
-		m.browser.Len(), scope, m.drafts, m.client.Org, m.client.Project)
+	// The review filter is named in the title because it is the one that can
+	// empty the list, and a list that is empty for a reason the user cannot see
+	// reads as a broken fetch.
+	review := ""
+	if m.mineToReview {
+		review = " · needs my review"
+		if len(m.reviewGroups) == 0 {
+			review += " (no groups configured)"
+		}
+	}
+	return fmt.Sprintf("pull requests (%d · %s · %s%s) · %s/%s",
+		m.browser.Len(), scope, m.drafts, review, m.client.Org, m.client.Project)
 }
 
 // Hints is the key line at the bottom.
 func (m *PullRequests) Keys() help.KeyMap {
-	return listKeys(keyDrafts, keyScope)
+	return listKeys(keyReview, keyDrafts, keyScope)
 }
 
 // Status is the transient status line, or the fuzzy filter prompt while one is

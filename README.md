@@ -110,8 +110,14 @@ comments rendered as markdown rather than flattened to prose.
 
 | key | |
 |---|---|
+| `v` | only pull requests waiting on your review |
 | `d` | cycle drafts hidden → drafts only → all |
 | `^t` | toggle between this repository and the whole project |
+
+`v` matches a pull request where you are a reviewer and have not voted, and
+excludes your own. A pull request can name a group as its reviewer rather than
+a person — `platform-devs` rather than you — and nothing in the pull request
+says who is in that group, so boardwalk has to be told. See Configuration.
 
 ### Builds
 

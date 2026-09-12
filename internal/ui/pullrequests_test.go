@@ -28,7 +28,7 @@ func prFixture() (*azdo.Client, []azdo.PullRequest) {
 func newPRs(t *testing.T) *PullRequests {
 	t.Helper()
 	c, prs := prFixture()
-	m := NewPullRequests(c)
+	m := NewPullRequests(c, nil)
 	m.now = func() time.Time { return time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC) }
 	// NewPullRequests scopes to the working directory's repository when
 	// azdo.CurrentRepo() finds one, which depends on this checkout's git
@@ -180,7 +180,7 @@ func TestPullRequestsFailedFetchReplacesTheFetchingPlaceholder(t *testing.T) {
 	// reading "fetching pull requests…" while the status line under it said the
 	// fetch had failed — two contradictory statements on one screen.
 	c, _ := prFixture()
-	m := NewPullRequests(c)
+	m := NewPullRequests(c, nil)
 
 	if got := m.Body(160, 20); !strings.Contains(got, "fetching pull requests") {
 		t.Fatalf("expected the fetching placeholder before anything lands:\n%s", got)
@@ -219,7 +219,7 @@ func TestPullRequestsRefetchesOnR(t *testing.T) {
 
 func TestPullRequestsSpinsWhileLoadingAndStopsWhenItLands(t *testing.T) {
 	c, prs := prFixture()
-	m := NewPullRequests(c)
+	m := NewPullRequests(c, nil)
 	m.now = func() time.Time { return time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC) }
 	m.repoOnly = false
 	m.drafts = draftsAll // both fixture rows visible, so the fan-out is two deep
@@ -265,7 +265,7 @@ func TestPullRequestsStopsSpinningWhenAFetchFails(t *testing.T) {
 	// A failure that left the counter up would spin forever with nothing
 	// running — the same shape as the in-flight guards that stranded rows.
 	c, _ := prFixture()
-	m := NewPullRequests(c)
+	m := NewPullRequests(c, nil)
 	m.repoOnly = false
 	m.Init()
 	r := drive(t, m, 160, 20)
@@ -274,5 +274,81 @@ func TestPullRequestsStopsSpinningWhenAFetchFails(t *testing.T) {
 
 	if m.work.busy() {
 		t.Error("still spinning after the fetch failed")
+	}
+}
+
+func TestPullRequestsNeedsMyReviewFilter(t *testing.T) {
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	c := &azdo.Client{Org: "acme", Project: "Platform", Me: "dev@acme.test"}
+	prs := []azdo.PullRequest{
+		{ID: 601, Title: "Waiting on me directly", Repo: "platform-api", RepoID: "r1",
+			Author: "Other Dev", AuthorKey: "other@acme.test", Created: now,
+			Reviewers: []azdo.Reviewer{{Name: "Dev Example", Key: "dev@acme.test"}}},
+		{ID: 602, Title: "Waiting on my group", Repo: "platform-api", RepoID: "r1",
+			Author: "Other Dev", AuthorKey: "other@acme.test", Created: now,
+			Reviewers: []azdo.Reviewer{{Name: "platform-devs", IsGroup: true}}},
+		{ID: 603, Title: "Someone elses group", Repo: "platform-api", RepoID: "r1",
+			Author: "Other Dev", AuthorKey: "other@acme.test", Created: now,
+			Reviewers: []azdo.Reviewer{{Name: "other-team", IsGroup: true}}},
+		{ID: 604, Title: "Already approved by me", Repo: "platform-api", RepoID: "r1",
+			Author: "Other Dev", AuthorKey: "other@acme.test", Created: now,
+			Reviewers: []azdo.Reviewer{{Name: "Dev Example", Key: "dev@acme.test", Vote: 10}}},
+		{ID: 605, Title: "Mine to write not review", Repo: "platform-api", RepoID: "r1",
+			Author: "Dev Example", AuthorKey: "dev@acme.test", Created: now,
+			Reviewers: []azdo.Reviewer{{Name: "platform-devs", IsGroup: true}}},
+	}
+
+	m := NewPullRequests(c, []string{"platform-devs"})
+	m.now = func() time.Time { return now }
+	m.repoOnly = false
+	updated, _ := m.Update(prsMsg{PRs: prs})
+	m = updated.(*PullRequests)
+	r := drive(t, m, 160, 24)
+
+	if !strings.Contains(r.frame(), "Someone elses group") {
+		t.Fatalf("the unfiltered list is missing a row:\n%s", r.frame())
+	}
+
+	r.send(runes("v"))
+	view := r.frame()
+
+	for _, want := range []string{"Waiting on me directly", "Waiting on my group"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the review filter dropped %q:\n%s", want, view)
+		}
+	}
+	for _, gone := range []string{"Someone elses group", "Already approved by me", "Mine to write not review"} {
+		if strings.Contains(view, gone) {
+			t.Errorf("the review filter kept %q:\n%s", gone, view)
+		}
+	}
+	if !strings.Contains(m.Title(), "needs my review") {
+		t.Errorf("title = %q, want the filter named", m.Title())
+	}
+
+	r.send(runes("v"))
+	if !strings.Contains(r.frame(), "Someone elses group") {
+		t.Error("v did not toggle the filter back off")
+	}
+}
+
+func TestPullRequestsReviewFilterSaysWhenNoGroupsAreConfigured(t *testing.T) {
+	// With no groups listed, a group-reviewed pull request cannot match, and an
+	// empty list would otherwise look like a failed fetch.
+	c := &azdo.Client{Org: "acme", Project: "Platform", Me: "dev@acme.test"}
+	m := NewPullRequests(c, nil)
+	m.repoOnly = false
+	updated, _ := m.Update(prsMsg{PRs: []azdo.PullRequest{
+		{ID: 606, Title: "Waiting on my group", Repo: "a", RepoID: "r1",
+			AuthorKey: "other@acme.test",
+			Reviewers: []azdo.Reviewer{{Name: "platform-devs", IsGroup: true}}},
+	}})
+	m = updated.(*PullRequests)
+	r := drive(t, m, 160, 24)
+
+	r.send(runes("v"))
+
+	if !strings.Contains(m.Title(), "no groups configured") {
+		t.Errorf("title = %q, want it to explain why the list is empty", m.Title())
 	}
 }

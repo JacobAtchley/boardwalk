@@ -12,10 +12,18 @@ import (
 // than this many open at once is not a list anyone reads top to bottom.
 const prPageSize = 200
 
-// Reviewer is one person on a pull request, with the vote they cast.
+// Reviewer is one reviewer on a pull request, with the vote they cast.
+//
+// A reviewer can be a group rather than a person — a team or a security group
+// added to the pull request — and Azure DevOps returns both in the same list,
+// telling them apart with isContainer. Nothing in the payload says who is in
+// the group.
 type Reviewer struct {
 	Name string
+	Key  string // uniqueName, lowercased, compared against Client.Me
 	Vote int
+	// IsGroup marks a team or security group standing in for its members.
+	IsGroup bool
 }
 
 // VoteLabel renders Azure DevOps's numeric vote as the words its own UI uses.
@@ -86,7 +94,9 @@ func (c *Client) PullRequests() ([]PullRequest, error) {
 			} `json:"repository"`
 			Reviewers []struct {
 				DisplayName string `json:"displayName"`
+				UniqueName  string `json:"uniqueName"`
 				Vote        int    `json:"vote"`
+				IsContainer bool   `json:"isContainer"`
 			} `json:"reviewers"`
 		} `json:"value"`
 	}
@@ -114,7 +124,12 @@ func (c *Client) PullRequests() ([]PullRequest, error) {
 			Description: StripHTML(v.Desc),
 		}
 		for _, r := range v.Reviewers {
-			pr.Reviewers = append(pr.Reviewers, Reviewer{Name: r.DisplayName, Vote: r.Vote})
+			pr.Reviewers = append(pr.Reviewers, Reviewer{
+				Name:    r.DisplayName,
+				Key:     strings.ToLower(r.UniqueName),
+				Vote:    r.Vote,
+				IsGroup: r.IsContainer,
+			})
 		}
 		prs = append(prs, pr)
 	}

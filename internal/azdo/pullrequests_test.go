@@ -152,3 +152,30 @@ func TestPullRequestURL(t *testing.T) {
 		t.Errorf("PullRequestURL = %q, want %q", got, want)
 	}
 }
+
+func TestPullRequestsMarksGroupReviewers(t *testing.T) {
+	// A group standing in for its members arrives in the same list as a person
+	// and is told apart only by isContainer.
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"value":[{"pullRequestId":700,"repository":{"id":"r1","name":"a"},
+		 "reviewers":[
+		   {"displayName":"Dev Example","uniqueName":"Dev@Acme.test","vote":0},
+		   {"displayName":"platform-devs","isContainer":true,"vote":0}]}]}`))
+	})
+
+	prs, err := c.PullRequests()
+	if err != nil {
+		t.Fatalf("PullRequests returned %v", err)
+	}
+
+	person, group := prs[0].Reviewers[0], prs[0].Reviewers[1]
+	if person.IsGroup {
+		t.Error("a person was marked as a group")
+	}
+	if person.Key != "dev@acme.test" {
+		t.Errorf("reviewer key = %q, want it lowercased for comparison against Me", person.Key)
+	}
+	if !group.IsGroup {
+		t.Error("a group reviewer was not marked as one")
+	}
+}

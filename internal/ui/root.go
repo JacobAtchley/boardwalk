@@ -39,6 +39,10 @@ type Root struct {
 	mineOnly      bool
 	includeClosed bool
 
+	// reviewGroups comes from the config file, for the pull request view's
+	// needs-my-review filter.
+	reviewGroups []string
+
 	stack  []View
 	choice int
 
@@ -57,8 +61,8 @@ type Root struct {
 // the menu is the first thing shown. No data comes in here: every view fetches
 // on entry, so the menu paints before anything touches the network — and a
 // view reached from the menu loads its own data however boardwalk was started.
-func NewRoot(c *azdo.Client, mineOnly, includeClosed bool, start string) *Root {
-	r := &Root{client: c, mineOnly: mineOnly, includeClosed: includeClosed, help: newHelp()}
+func NewRoot(c *azdo.Client, mineOnly, includeClosed bool, reviewGroups []string, start string) *Root {
+	r := &Root{client: c, mineOnly: mineOnly, includeClosed: includeClosed, reviewGroups: reviewGroups, help: newHelp()}
 	if start != "" {
 		if v := r.build(start); v != nil {
 			r.stack = append(r.stack, v)
@@ -86,7 +90,7 @@ func (r *Root) build(name string) View {
 	case "items":
 		return NewWorkItems(r.client, nil, r.mineOnly, r.includeClosed)
 	case "prs":
-		return NewPullRequests(r.client)
+		return NewPullRequests(r.client, r.reviewGroups)
 	case "builds":
 		return NewBuilds(r.client)
 	default:

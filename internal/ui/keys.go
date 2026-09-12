@@ -23,6 +23,7 @@ var (
 	keyActive = key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "set active"))
 	keyBranch = key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "branch"))
 	keyDrafts = key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "drafts"))
+	keyReview = key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "needs my review"))
 	keyLogs   = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "logs"))
 	keyItem   = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open item"))
 	keyTop    = key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top"))
