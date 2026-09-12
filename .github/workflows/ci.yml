@@ -1,0 +1,47 @@
+name: ci
+
+# Runs on every pull request, and on main so the branch has its own record of
+# passing. The required status check on main is this workflow's "build" job.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Taken from go.mod rather than pinned here, so the toolchain the CI
+          # uses cannot drift from the one the module declares.
+          go-version-file: go.mod
+          cache: true
+
+      # gofmt exits 0 whether or not it found anything and reports the files it
+      # would rewrite on stdout, so the emptiness of that output is the check.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: build
+        run: go build ./...
+
+      # -race is worth the runtime here: the views run fetches on their own
+      # goroutines and hand the results back through bubbletea's message loop.
+      - name: test
+        run: go test -race ./...
