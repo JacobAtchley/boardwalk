@@ -1,51 +1,155 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func writeConfig(t *testing.T, body string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "config.json")
+	path := filepath.Join(t.TempDir(), "boardwalk.json")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
 
-func TestLoadReadsTheGroups(t *testing.T) {
-	t.Setenv(EnvPath, writeConfig(t, `{"reviewGroups": ["platform-devs", "Platform Leads"]}`))
+func TestLoadReadsEverySetting(t *testing.T) {
+	t.Setenv(EnvPath, writeConfig(t, `{
+		"org": "acme",
+		"project": "Platform",
+		"reviewGroups": ["platform-devs", "Platform Leads"]
+	}`))
 
 	c, err := Load()
 	if err != nil {
 		t.Fatalf("Load returned %v", err)
+	}
+	if c.Org != "acme" || c.Project != "Platform" {
+		t.Errorf("org/project = %q/%q", c.Org, c.Project)
 	}
 	if len(c.ReviewGroups) != 2 || c.ReviewGroups[0] != "platform-devs" {
 		t.Errorf("groups = %v", c.ReviewGroups)
 	}
 }
 
-func TestLoadWithNoConfigFileIsNotAnError(t *testing.T) {
-	// boardwalk needs no config to run; the file only adds to what it knows.
+func TestLoadDistinguishesAMissingConfigFromABrokenOne(t *testing.T) {
+	// "You have not set boardwalk up" and "your config is wrong" want
+	// different messages, so the caller has to be able to tell them apart.
 	t.Setenv(EnvPath, filepath.Join(t.TempDir(), "absent.json"))
 
-	c, err := Load()
-	if err != nil {
-		t.Fatalf("Load with no file returned %v", err)
+	_, err := Load()
+	if !errors.Is(err, ErrMissing) {
+		t.Fatalf("Load with no file returned %v, want ErrMissing", err)
 	}
-	if len(c.ReviewGroups) != 0 {
-		t.Errorf("groups = %v, want none", c.ReviewGroups)
+	if !strings.Contains(err.Error(), "absent.json") {
+		t.Errorf("error = %q, want it to name the path it looked at", err)
 	}
 }
 
 func TestLoadReportsAMalformedConfig(t *testing.T) {
-	// Silently ignoring a typo would leave the review filter quietly missing
-	// pull requests, which is the failure this config exists to prevent.
-	t.Setenv(EnvPath, writeConfig(t, `{"reviewGroups": "not-a-list"}`))
+	t.Setenv(EnvPath, writeConfig(t, `{"org": "acme",}`))
 
-	if _, err := Load(); err == nil {
-		t.Error("a malformed config loaded without complaint")
+	_, err := Load()
+	if err == nil {
+		t.Fatal("a malformed config loaded without complaint")
+	}
+	if errors.Is(err, ErrMissing) {
+		t.Error("a malformed config was reported as a missing one")
+	}
+}
+
+func TestPathDefaultsToDotConfig(t *testing.T) {
+	// Not os.UserConfigDir: that answers ~/Library/Application Support on
+	// macOS, which is not where anyone keeping dotfiles would look.
+	t.Setenv(EnvPath, "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	path, err := Path()
+	if err != nil {
+		t.Fatalf("Path returned %v", err)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory in this environment")
+	}
+	if want := filepath.Join(home, ".config", "boardwalk.json"); path != want {
+		t.Errorf("path = %q, want %q", path, want)
+	}
+}
+
+func TestPathHonoursXDGConfigHome(t *testing.T) {
+	t.Setenv(EnvPath, "")
+	t.Setenv("XDG_CONFIG_HOME", "/xdg")
+
+	path, err := Path()
+	if err != nil {
+		t.Fatalf("Path returned %v", err)
+	}
+	if path != "/xdg/boardwalk.json" {
+		t.Errorf("path = %q, want it under XDG_CONFIG_HOME", path)
+	}
+}
+
+func TestPathHonoursTheOverride(t *testing.T) {
+	t.Setenv(EnvPath, "/tmp/elsewhere.json")
+
+	path, err := Path()
+	if err != nil {
+		t.Fatalf("Path returned %v", err)
+	}
+	if path != "/tmp/elsewhere.json" {
+		t.Errorf("path = %q, want the override", path)
+	}
+}
+
+func TestValidateNamesWhatIsMissingAndWhere(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		c    Config
+		want string
+	}{
+		{"neither", Config{}, "neither org nor project"},
+		{"no org", Config{Project: "Platform"}, "does not set org"},
+		{"no project", Config{Org: "acme"}, "does not set project"},
+	} {
+		err := tc.c.Validate("/home/dev/.config/boardwalk.json")
+		if err == nil {
+			t.Errorf("%s: Validate returned no error", tc.name)
+			continue
+		}
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: error = %q, want it to mention %q", tc.name, err, tc.want)
+		}
+		if !strings.Contains(err.Error(), "boardwalk.json") {
+			t.Errorf("%s: error = %q, want it to name the file", tc.name, err)
+		}
+	}
+}
+
+func TestValidateAcceptsAConfigWithBothSet(t *testing.T) {
+	c := Config{Org: "acme", Project: "Platform"}
+
+	if err := c.Validate("/anywhere"); err != nil {
+		t.Errorf("Validate returned %v for a complete config", err)
+	}
+}
+
+func TestExampleIsItselfValid(t *testing.T) {
+	// The example is what an error message tells someone to copy, so it had
+	// better load.
+	path := writeConfig(t, Example())
+	t.Setenv(EnvPath, path)
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("the example config does not parse: %v", err)
+	}
+	if err := c.Validate(path); err != nil {
+		t.Errorf("the example config does not validate: %v", err)
 	}
 }
