@@ -76,12 +76,9 @@ func assertDetailScrollSticks[M View](t *testing.T, r *runtimeView[M], marker st
 	}
 }
 
-func TestWorkItemsDetailScrollSurvivesARepaint(t *testing.T) {
-	c, items := fixture()
-	r := drive[*WorkItems](t, NewWorkItems(c, items, false, false), 120, 8)
-
-	assertDetailScrollSticks(t, r, "#4021")
-}
+// There is no work item variant of this: that view's side pane is a five-field
+// summary that cannot overflow, which is the point of it. The equivalent guard
+// for the pane which can is TestItemScrollsAndTheScrollSurvivesARepaint.
 
 func TestPullRequestsDetailScrollSurvivesARepaint(t *testing.T) {
 	r := drive[*PullRequests](t, newPRs(t), 120, 8)

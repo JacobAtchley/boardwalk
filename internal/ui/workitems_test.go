@@ -4,7 +4,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
 	tea "github.com/charmbracelet/bubbletea"
@@ -146,60 +145,6 @@ func TestWordwrapBreaksOnWords(t *testing.T) {
 	}
 }
 
-func TestWorkItemsShowsAcceptanceCriteria(t *testing.T) {
-	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false, false))
-
-	if !strings.Contains(body(t, m), "Retries three times") {
-		t.Errorf("the detail pane is missing the acceptance criteria:\n%s", body(t, m))
-	}
-}
-
-func TestWorkItemsRequestsTheDiscussionForTheSelectedItem(t *testing.T) {
-	c, items := fixture()
-	// Deliberately not routed through sized(): that helper drives Update,
-	// which also kicks off the fetch as a side effect (so the cursor can
-	// pick up a newly-scrolled-to row's discussion). Calling it first would
-	// mark the fetch in flight before Init ever ran, defeating the point of
-	// this test. In production Init runs first, before any other message.
-	m := NewWorkItems(c, items, false, false)
-
-	// The fetch is a command rather than a call, so the test can run it or not.
-	if cmd := m.Init(); cmd == nil {
-		t.Fatal("the view did not ask for the selected item's discussion")
-	}
-}
-
-func TestWorkItemsRendersAFetchedDiscussion(t *testing.T) {
-	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false, false))
-
-	updated, _ := m.Update(commentsMsg{ID: 4021, Comments: []azdo.Comment{
-		{Author: "Other Dev", Created: time.Now().Add(-2 * time.Hour), Text: "Why the retry cap?"},
-	}})
-	m = updated.(*WorkItems)
-
-	view := body(t, m)
-	if !strings.Contains(view, "Why the retry cap?") || !strings.Contains(view, "Other Dev") {
-		t.Errorf("the discussion did not render:\n%s", view)
-	}
-}
-
-func TestWorkItemsIgnoresADiscussionForAnotherItem(t *testing.T) {
-	// A slow fetch can land after the cursor has moved on.
-	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false, false))
-
-	updated, _ := m.Update(commentsMsg{ID: 3998, Comments: []azdo.Comment{
-		{Author: "Other Dev", Text: "stale comment"},
-	}})
-	m = updated.(*WorkItems)
-
-	if strings.Contains(body(t, m), "stale comment") {
-		t.Error("a discussion for an unselected item was rendered")
-	}
-}
-
 func TestWorkItemsToggleSwitchesScope(t *testing.T) {
 	c, items := fixture()
 	m := sized(t, NewWorkItems(c, items, false, false))
@@ -227,33 +172,6 @@ func TestWorkItemsErrorGoesToTheStatusLine(t *testing.T) {
 	// The list must survive the failure.
 	if !strings.Contains(body(t, m), "Retry webhook delivery") {
 		t.Error("the rows were lost when a fetch failed")
-	}
-}
-
-func TestWorkItemsRecoversFromAFailedDiscussionFetch(t *testing.T) {
-	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false, false))
-
-	updated, _ := m.Update(commentsErrMsg{ID: 4021, Err: errors.New("could not load the discussion for #4021: timeout")})
-	m = updated.(*WorkItems)
-
-	text, isErr := m.Status()
-	if !isErr || !strings.Contains(text, "timeout") {
-		t.Errorf("status = %q, isErr = %v; want the fetch error reported", text, isErr)
-	}
-	// The rows must survive the failure, same as any other fetch error.
-	if !strings.Contains(body(t, m), "Retry webhook delivery") {
-		t.Error("the rows were lost when the discussion fetch failed")
-	}
-	// A failed fetch is not the same as one still in flight — the pane must
-	// say so honestly rather than reading "loading…" forever.
-	if strings.Contains(body(t, m), "loading…") {
-		t.Error("the pane should not still say loading after the fetch failed")
-	}
-	// The in-flight guard must be cleared so a later selection retries
-	// instead of being silently skipped forever.
-	if cmd := m.fetchComments(); cmd == nil {
-		t.Error("a failed discussion fetch should be retried on a later selection, not skipped forever")
 	}
 }
 
@@ -292,16 +210,15 @@ func TestWorkItemsRendersItemsThatArriveFromItsOwnFetch(t *testing.T) {
 
 func TestWorkItemsBuiltWithItemsDoesNotRefetchThem(t *testing.T) {
 	// -dump's path and the tests hand the view a batch that is already
-	// fetched; entering it must ask for the selected item's discussion, not
-	// for the project all over again.
+	// fetched; entering it must not ask for the project all over again.
 	c, items := fixture()
 	m := NewWorkItems(c, items, false, false)
 
 	if got := m.Body(testWidth, testHeight); strings.Contains(got, "fetching work items") {
 		t.Errorf("a view built with items showed the fetching placeholder:\n%s", got)
 	}
-	if cmd := m.Init(); cmd == nil {
-		t.Fatal("the view did not ask for the selected item's discussion")
+	if cmd := m.Init(); cmd != nil {
+		t.Error("a view built with items fetched anyway")
 	}
 }
 
@@ -334,5 +251,42 @@ func TestWorkItemsRefetchesOnR(t *testing.T) {
 	}
 	if !strings.Contains(helpLine(m.Keys()), "r refresh") {
 		t.Errorf("help = %q, want the refresh key offered", helpLine(m.Keys()))
+	}
+}
+
+func TestWorkItemsEnterOpensTheFullItem(t *testing.T) {
+	c, items := fixture()
+	m := NewWorkItems(c, items, false, false)
+	m.Body(testWidth, testHeight)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter produced no command")
+	}
+	push, ok := cmd().(PushMsg)
+	if !ok {
+		t.Fatalf("enter produced %T, want a PushMsg", cmd())
+	}
+	if !strings.Contains(push.View.Title(), "#4021") {
+		t.Errorf("pushed view = %q, want the selected work item", push.View.Title())
+	}
+}
+
+func TestWorkItemsSummaryOmitsTheLongText(t *testing.T) {
+	// The long text is what enter is for; repeating it here costs the room the
+	// five identifying fields need.
+	c, items := fixture()
+	m := NewWorkItems(c, items, false, false)
+	view := m.Body(testWidth, testHeight)
+
+	for _, want := range []string{"#4021", "assigned:", "tags:", "iteration:", "enter for the full item"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the summary is missing %q:\n%s", want, view)
+		}
+	}
+	for _, gone := range []string{"description", "acceptance criteria", "discussion"} {
+		if strings.Contains(view, gone) {
+			t.Errorf("the summary still carries %q, which belongs to the full item:\n%s", gone, view)
+		}
 	}
 }

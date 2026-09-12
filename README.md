@@ -96,9 +96,15 @@ quits from anywhere, including while a prompt is open.
 
 | key | |
 |---|---|
+| `enter` | open the full item |
 | `^t` | toggle between everyone's items and yours |
 | `a` | set the item Active |
 | `b` | create a branch, set the item Active, and link the branch to it |
+
+The side pane is a summary — id, title, assignee, tags and iteration — so it
+stays readable while the cursor moves. `enter` opens the item itself: every
+field plus the whole discussion, with the description, acceptance criteria and
+comments rendered as markdown rather than flattened to prose.
 
 ### Pull requests
 

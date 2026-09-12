@@ -41,21 +41,6 @@ func (r workItemRow) URL() string    { return r.url }
 // entered rather than before the program starts.
 type workItemsMsg struct{ Items []azdo.WorkItem }
 
-// commentsMsg carries a fetched discussion. It names the work item it belongs
-// to because a slow fetch can land after the cursor has moved on.
-type commentsMsg struct {
-	ID       int
-	Comments []azdo.Comment
-}
-
-// commentsErrMsg is a discussion fetch that failed. It names its work item so
-// the in-flight guard can be cleared — without the id the item would stay
-// marked as loading forever and never be retried.
-type commentsErrMsg struct {
-	ID  int
-	Err error
-}
-
 // WorkItems is the work item browser.
 type WorkItems struct {
 	client  *azdo.Client
@@ -72,13 +57,6 @@ type WorkItems struct {
 	// loaded is false until a batch has landed, whether handed to the
 	// constructor or fetched on entry, so the body can say which it is.
 	loaded bool
-
-	// comments is keyed by work item id and filled lazily as the cursor moves.
-	comments map[int][]azdo.Comment
-	loading  map[int]bool
-	// discussionErr marks an id whose discussion fetch failed, so the pane
-	// can say so honestly instead of reading "loading…" forever.
-	discussionErr map[int]bool
 
 	status string
 	failed bool
@@ -100,10 +78,7 @@ func NewWorkItems(c *azdo.Client, items []azdo.WorkItem, mineOnly, includeClosed
 		browser:       NewBrowser(),
 		mineOnly:      mineOnly,
 		includeClosed: includeClosed,
-		comments:      map[int][]azdo.Comment{},
 		work:          newWork(),
-		loading:       map[int]bool{},
-		discussionErr: map[int]bool{},
 		now:           time.Now,
 	}
 
@@ -135,7 +110,7 @@ func (m *WorkItems) Init() tea.Cmd {
 	if !m.loaded {
 		return m.fetchItems()
 	}
-	return m.fetchComments()
+	return nil
 }
 
 // fetchItems reads the project's work items off the UI goroutine.
@@ -168,32 +143,6 @@ func (m *WorkItems) selected() (workItemRow, bool) {
 	return it, ok
 }
 
-// fetchComments loads the selected item's discussion unless it is already
-// loaded or in flight.
-func (m *WorkItems) fetchComments() tea.Cmd {
-	it, ok := m.selected()
-	if !ok {
-		return nil
-	}
-	if _, done := m.comments[it.ID]; done || m.loading[it.ID] {
-		return nil
-	}
-
-	m.loading[it.ID] = true
-	// A retry after a prior failure should show "loading…" again rather than
-	// the stale failure message while the new attempt is in flight.
-	delete(m.discussionErr, it.ID)
-	client, id := m.client, it.ID
-	fetch := func() tea.Msg {
-		comments, err := client.Comments(id)
-		if err != nil {
-			return commentsErrMsg{ID: id, Err: fmt.Errorf("could not load the discussion for #%d: %w", id, err)}
-		}
-		return commentsMsg{ID: id, Comments: comments}
-	}
-	return tea.Batch(fetch, m.work.begin(1))
-}
-
 // Update handles input and fetch results. It satisfies View.
 func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -205,26 +154,6 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.setItems(msg.Items)
 		m.loaded = true
 		m.status, m.failed = "", false
-		return m, m.fetchComments()
-
-	case commentsMsg:
-		m.work.done()
-		delete(m.loading, msg.ID)
-		delete(m.discussionErr, msg.ID)
-		m.comments[msg.ID] = msg.Comments
-		if it, ok := m.selected(); ok && it.ID == msg.ID {
-			m.browser.RefreshDetail()
-		}
-		return m, nil
-
-	case commentsErrMsg:
-		m.work.done()
-		delete(m.loading, msg.ID)
-		m.discussionErr[msg.ID] = true
-		m.status, m.failed = msg.Err.Error(), true
-		if it, ok := m.selected(); ok && it.ID == msg.ID {
-			m.browser.RefreshDetail()
-		}
 		return m, nil
 
 	case ErrMsg:
@@ -309,7 +238,14 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 		case "ctrl+t":
 			m.mineOnly = !m.mineOnly
 			m.applyScope()
-			return m, m.fetchComments()
+			return m, nil
+
+		case "enter":
+			if it, ok := m.selected(); ok {
+				item := NewItem(m.client, it.WorkItem, nil)
+				return m, func() tea.Msg { return PushMsg{View: item} }
+			}
+			return m, nil
 
 		case "a":
 			if it, ok := m.selected(); ok {
@@ -338,9 +274,12 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 	}
 
 	cmd := m.browser.Update(msg)
-	return m, tea.Batch(cmd, m.fetchComments())
+	return m, cmd
 }
 
+// renderDetail is a summary, not the item. It carries what identifies a row
+// while the cursor moves over it; the description, the acceptance criteria and
+// the discussion need room to be readable and live behind enter, in Item.
 func (m *WorkItems) renderDetail(row Row, width int) string {
 	it, ok := row.(workItemRow)
 	if !ok {
@@ -350,35 +289,16 @@ func (m *WorkItems) renderDetail(row Row, width int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\n", detailTitle.Render(truncate(it.Label(), width)))
 	for _, field := range [][2]string{
-		{"type", it.Type},
-		{"state", it.State},
-		{"iteration", orDash(it.Iteration)},
-		{"tags", orDash(strings.ReplaceAll(it.Tags, "; ", ", "))},
 		{"assigned", it.Assigned},
+		{"tags", orDash(strings.ReplaceAll(it.Tags, "; ", ", "))},
+		{"iteration", orDash(it.Iteration)},
 	} {
 		fmt.Fprintf(&b, "%s %s\n",
 			labelStyle.Render(fmt.Sprintf("%-10s", field[0]+":")),
 			truncate(field[1], width-11))
 	}
 
-	section(&b, "description", it.Description, "(no description)", width)
-	section(&b, "acceptance criteria", it.AcceptanceCriteria, "(none)", width)
-
-	fmt.Fprintf(&b, "\n%s\n", labelStyle.Render("discussion"))
-	switch comments, loaded := m.comments[it.ID]; {
-	case m.discussionErr[it.ID]:
-		fmt.Fprintf(&b, "%s\n", chromeStyle.Render("(could not load the discussion)"))
-	case !loaded:
-		fmt.Fprintf(&b, "%s\n", chromeStyle.Render("loading…"))
-	case len(comments) == 0:
-		fmt.Fprintf(&b, "%s\n", chromeStyle.Render("(no comments)"))
-	default:
-		for _, c := range comments {
-			fmt.Fprintf(&b, "\n%s\n%s\n",
-				labelStyle.Render(fmt.Sprintf("%s · %s", c.Author, humanAge(c.Created, m.now()))),
-				wordwrap(c.Text, width))
-		}
-	}
+	fmt.Fprintf(&b, "\n%s\n", chromeStyle.Render("enter for the full item"))
 	return b.String()
 }
 
@@ -428,7 +348,7 @@ func (m *WorkItems) Title() string {
 
 // Hints is the key line at the bottom.
 func (m *WorkItems) Keys() help.KeyMap {
-	return listKeys(keyScope, keyActive, keyBranch)
+	return listKeys(keyItem, keyScope, keyActive, keyBranch)
 }
 
 // Status is the transient status line, or a prompt while one is open: the

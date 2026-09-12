@@ -24,6 +24,7 @@ var (
 	keyBranch = key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "branch"))
 	keyDrafts = key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "drafts"))
 	keyLogs   = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "logs"))
+	keyItem   = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open item"))
 	keyTop    = key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top"))
 	keyBottom = key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom"))
 )
