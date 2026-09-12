@@ -74,10 +74,30 @@ func TestItemFetchesTheDiscussionWhenItWasNotGivenOne(t *testing.T) {
 }
 
 func TestItemDoesNotRefetchADiscussionItWasGiven(t *testing.T) {
+	// Init still runs — the links are always its own to fetch — so what proves
+	// the discussion was reused is that it is already loaded and nothing is
+	// outstanding for it.
+	m := newItem(t, []azdo.Comment{{Author: "Other Dev", Text: "Already here"}})
+	m.Init()
+
+	if !m.loaded {
+		t.Error("the view did not treat the discussion it was handed as loaded")
+	}
+	if !strings.Contains(drive(t, m, 100, 40).frame(), "Already here") {
+		t.Error("the handed-over discussion did not render")
+	}
+}
+
+func TestItemFetchesItsLinksEvenWithADiscussionInHand(t *testing.T) {
+	// The list caches comments and knows nothing about pull request links, so
+	// returning early on the discussion alone left the links never fetched.
 	m := newItem(t, []azdo.Comment{{Author: "Other Dev", Text: "Already here"}})
 
-	if cmd := m.Init(); cmd != nil {
-		t.Error("the view refetched a discussion it had already been handed")
+	if cmd := m.Init(); cmd == nil {
+		t.Fatal("a view handed a discussion did not fetch its pull request links")
+	}
+	if !m.work.busy() {
+		t.Error("the spinner is not running while the links are in flight")
 	}
 }
 
@@ -94,8 +114,14 @@ func TestItemRendersADiscussionThatArrivesLater(t *testing.T) {
 	if !strings.Contains(view, "Third Dev") || !strings.Contains(view, "Shipped") {
 		t.Errorf("the fetched discussion did not render:\n%s", view)
 	}
+	// Init issues two fetches — the discussion and the pull request links — and
+	// the spinner belongs to both.
+	if !m.work.busy() {
+		t.Error("stopped spinning while the linked pull requests were still in flight")
+	}
+	r.send(linkedPRsMsg{ID: 4021})
 	if m.work.busy() {
-		t.Error("still spinning after the discussion landed")
+		t.Error("still spinning after both fetches landed")
 	}
 }
 
@@ -107,14 +133,17 @@ func TestItemSaysSoWhenTheDiscussionFails(t *testing.T) {
 	r.send(commentsErrMsg{ID: 4021, Err: errTest})
 
 	view := r.frame()
-	if strings.Contains(view, "loading") {
-		t.Errorf("the pane still claims to be loading after the fetch failed:\n%s", view)
+	if !strings.Contains(view, "could not load the discussion") {
+		t.Errorf("the discussion section does not report the failure:\n%s", view)
 	}
 	if status, isErr := m.Status(); !isErr || !strings.Contains(status, errTest.Error()) {
 		t.Errorf("status = %q, isErr = %v; want the failure reported", status, isErr)
 	}
+	// The links fetch is still outstanding; a failure in one does not stop the
+	// spinner owed to the other.
+	r.send(linkedPRsMsg{ID: 4021})
 	if m.work.busy() {
-		t.Error("still spinning after the fetch failed")
+		t.Error("still spinning after both fetches settled")
 	}
 }
 
@@ -169,5 +198,70 @@ func TestItemTitleNamesTheWorkItem(t *testing.T) {
 
 	if got := m.Title(); !strings.Contains(got, "#4021") || !strings.Contains(got, "acme/Platform") {
 		t.Errorf("Title = %q", got)
+	}
+}
+
+func TestItemShowsItsLinkedPullRequests(t *testing.T) {
+	m := newItem(t, nil)
+	m.Init()
+	r := drive(t, m, 100, 60)
+
+	r.send(linkedPRsMsg{ID: 4021, PRs: []azdo.PullRequest{
+		{ID: 512, Title: "Retry webhooks", Status: "active", Target: "refs/heads/main"},
+		{ID: 400, Title: "Earlier attempt", Status: "abandoned", Target: "refs/heads/main"},
+	}})
+
+	view := r.frame()
+	for _, want := range []string{"!512", "Retry webhooks", "active", "main", "!400", "abandoned"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the linked pull requests are missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestItemSaysWhenNothingIsLinked(t *testing.T) {
+	m := newItem(t, nil)
+	m.Init()
+	r := drive(t, m, 100, 60)
+
+	r.send(linkedPRsMsg{ID: 4021})
+
+	if !strings.Contains(r.frame(), "(none linked)") {
+		t.Errorf("a work item with no pull requests did not say so:\n%s", r.frame())
+	}
+}
+
+func TestItemOpensItsNewestLinkedPullRequest(t *testing.T) {
+	m := newItem(t, nil)
+	m.Init()
+	r := drive(t, m, 100, 60)
+	r.send(linkedPRsMsg{ID: 4021, PRs: []azdo.PullRequest{
+		{ID: 512, Title: "Newest", RepoID: "r1"},
+		{ID: 400, Title: "Older", RepoID: "r1"},
+	}})
+
+	cmd := r.send(runes("p"))
+	if cmd == nil {
+		t.Fatal("p produced no command")
+	}
+	push, ok := cmd().(PushMsg)
+	if !ok {
+		t.Fatalf("p produced %T, want a PushMsg", cmd())
+	}
+	if !strings.Contains(push.View.Title(), "!512") {
+		t.Errorf("pushed %q, want the first listed pull request", push.View.Title())
+	}
+}
+
+func TestItemSaysSoWhenThereIsNoLinkedPullRequestToOpen(t *testing.T) {
+	m := newItem(t, nil)
+	m.Init()
+	r := drive(t, m, 100, 60)
+	r.send(linkedPRsMsg{ID: 4021})
+
+	r.send(runes("p"))
+
+	if status, _ := m.Status(); !strings.Contains(status, "no pull requests are linked") {
+		t.Errorf("status = %q, want p to explain that there is nothing to open", status)
 	}
 }

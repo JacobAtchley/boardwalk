@@ -22,6 +22,13 @@ type threadsLoadedMsg struct {
 	Err     error
 }
 
+// linkedItemsMsg carries the work items a pull request is linked to.
+type linkedItemsMsg struct {
+	PR    int
+	Items []azdo.WorkItem
+	Err   error
+}
+
 // PullRequestDetail is one pull request in full: the description, every
 // reviewer's vote, and every discussion rather than the opening line of the
 // unresolved ones.
@@ -37,6 +44,11 @@ type PullRequestDetail struct {
 
 	loaded bool
 	failed bool
+
+	// linked are the work items this pull request closes or contributes to.
+	linked       []azdo.WorkItem
+	linkedLoaded bool
+	linkedErr    bool
 
 	// renderedAt is the width the pane was last laid out for. Glamour hard
 	// wraps, so a resize means rendering again rather than reflowing.
@@ -61,21 +73,50 @@ func NewPullRequestDetail(c *azdo.Client, pr azdo.PullRequest, threads []azdo.Th
 	}
 }
 
-// Init fetches the discussion unless one was handed over.
+// Init fetches what it does not already have. The two halves are independent:
+// the list hands over the discussion it cached but knows nothing about the
+// linked work items, so returning early on the discussion alone would leave the
+// links permanently unfetched.
 func (m *PullRequestDetail) Init() tea.Cmd {
-	if m.loaded {
+	var cmds []tea.Cmd
+	if !m.loaded {
+		cmds = append(cmds, m.fetchThreads())
+	}
+	if !m.linkedLoaded {
+		cmds = append(cmds, m.fetchLinked())
+	}
+	if len(cmds) == 0 {
 		return nil
 	}
+	return tea.Batch(tea.Batch(cmds...), m.work.begin(len(cmds)))
+}
 
+func (m *PullRequestDetail) fetchThreads() tea.Cmd {
 	client, repo, id := m.client, m.pr.RepoID, m.pr.ID
-	fetch := func() tea.Msg {
+	return func() tea.Msg {
 		threads, err := client.Threads(repo, id)
 		if err != nil {
 			return threadsLoadedMsg{PR: id, Err: fmt.Errorf("could not load the discussion for !%d: %w", id, err)}
 		}
 		return threadsLoadedMsg{PR: id, Threads: threads}
 	}
-	return tea.Batch(fetch, m.work.begin(1))
+}
+
+// fetchLinked resolves the work items this pull request is attached to. The
+// endpoint returns bare ids, so the titles come from one batch fetch.
+func (m *PullRequestDetail) fetchLinked() tea.Cmd {
+	client, repo, id := m.client, m.pr.RepoID, m.pr.ID
+	return func() tea.Msg {
+		ids, err := client.PullRequestWorkItemIDs(repo, id)
+		if err != nil {
+			return linkedItemsMsg{PR: id, Err: fmt.Errorf("could not load the work items for !%d: %w", id, err)}
+		}
+		items, err := client.WorkItemsByID(ids)
+		if err != nil {
+			return linkedItemsMsg{PR: id, Err: fmt.Errorf("could not load the work items for !%d: %w", id, err)}
+		}
+		return linkedItemsMsg{PR: id, Items: items}
+	}
 }
 
 func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
@@ -97,6 +138,20 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.invalidate()
 		return m, nil
 
+	case linkedItemsMsg:
+		if msg.PR != m.pr.ID {
+			return m, nil
+		}
+		m.work.done()
+		m.linkedLoaded = true
+		if msg.Err != nil {
+			m.linkedErr, m.status = true, msg.Err.Error()
+		} else {
+			m.linked = msg.Items
+		}
+		m.invalidate()
+		return m, nil
+
 	case StatusMsg:
 		m.status = msg.Text
 		return m, nil
@@ -113,7 +168,15 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 			return m, nil
 		case key.Matches(msg, keyRefresh):
 			m.loaded, m.failed = false, false
+			m.linkedLoaded, m.linkedErr = false, false
 			return m, m.Init()
+		case key.Matches(msg, keyLinkedItem):
+			if len(m.linked) == 0 {
+				m.status = "no work items are linked to this pull request"
+				return m, nil
+			}
+			item := NewItem(m.client, m.linked[0], nil)
+			return m, func() tea.Msg { return PushMsg{View: item} }
 		}
 
 		if status, handled := SharedAction(prDetailRow{m.pr, m.client.PullRequestURL(m.pr.Repo, m.pr.ID)}, msg); handled {
@@ -179,8 +242,35 @@ func (m *PullRequestDetail) render(width int) string {
 	fmt.Fprintf(&b, "\n%s\n%s\n", labelStyle.Render("description"),
 		renderMarkdown(m.pr.Description, "_no description_", width))
 
+	m.renderLinked(&b, width)
 	m.renderThreads(&b, width)
 	return b.String()
+}
+
+// renderLinked writes the work items this pull request is attached to, which is
+// the other half of the loop the branch flow opens: b links a branch to an
+// item, and this is where that link comes back.
+func (m *PullRequestDetail) renderLinked(b *strings.Builder, width int) {
+	fmt.Fprintf(b, "\n%s\n", labelStyle.Render("work items"))
+
+	switch {
+	case m.linkedErr:
+		fmt.Fprintf(b, "%s\n", errStyle.Render("could not load the links — press r to try again"))
+	case !m.linkedLoaded:
+		fmt.Fprintf(b, "%s\n", chromeStyle.Render(m.work.View()+"loading…"))
+	case len(m.linked) == 0:
+		fmt.Fprintf(b, "%s\n", chromeStyle.Render("(none linked)"))
+	default:
+		for i, wi := range m.linked {
+			marker := " "
+			if i == 0 {
+				marker = "▸" // what w opens
+			}
+			fmt.Fprintf(b, "%s %s\n", marker, truncate(fmt.Sprintf("#%d %s — %s · %s",
+				wi.ID, wi.Title, wi.State, wi.Assigned), width-2))
+		}
+		fmt.Fprintf(b, "%s\n", chromeStyle.Render("  w opens the first"))
+	}
 }
 
 // renderThreads writes every discussion, unresolved first: those are the ones
@@ -239,7 +329,7 @@ func (m *PullRequestDetail) Title() string {
 
 // Keys omits the filter: there is nothing here to filter.
 func (m *PullRequestDetail) Keys() help.KeyMap {
-	own := []key.Binding{keyTop, keyBottom, keyRefresh}
+	own := []key.Binding{keyLinkedItem, keyTop, keyBottom, keyRefresh}
 	return keyMap{
 		short:  append(append([]key.Binding{}, own...), keyCopyID, keyBack, keyHelp),
 		groups: [][]key.Binding{own, {keyCopyID, keySlack, keyOpen}, navBindings()},

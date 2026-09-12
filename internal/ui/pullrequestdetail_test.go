@@ -97,9 +97,22 @@ func TestPullRequestDetailFetchesWhenTheListHadNothingCached(t *testing.T) {
 
 func TestPullRequestDetailUsesThreadsTheListAlreadyHad(t *testing.T) {
 	m := newPRDetail(t, []azdo.Thread{{Status: "active", Comments: []azdo.ThreadComment{{Author: "A", Text: "hi"}}}})
+	m.Init()
 
-	if cmd := m.Init(); cmd != nil {
-		t.Error("the view refetched a discussion it was handed")
+	if !m.loaded {
+		t.Error("the view did not treat the threads it was handed as loaded")
+	}
+	if !strings.Contains(drive(t, m, 100, 60).frame(), "hi") {
+		t.Error("the handed-over discussion did not render")
+	}
+}
+
+func TestPullRequestDetailFetchesItsLinksEvenWithThreadsInHand(t *testing.T) {
+	// The list caches threads and knows nothing about linked work items.
+	m := newPRDetail(t, []azdo.Thread{{Status: "active", Comments: []azdo.ThreadComment{{Author: "A", Text: "hi"}}}})
+
+	if cmd := m.Init(); cmd == nil {
+		t.Fatal("a view handed its threads did not fetch its work item links")
 	}
 }
 
@@ -115,8 +128,13 @@ func TestPullRequestDetailRendersThreadsThatArriveLater(t *testing.T) {
 	if !strings.Contains(r.frame(), "Landed later") {
 		t.Errorf("the fetched discussion did not render:\n%s", r.frame())
 	}
+	// Init issues two fetches — the discussion and the work item links.
+	if !m.work.busy() {
+		t.Error("stopped spinning while the linked work items were still in flight")
+	}
+	r.send(linkedItemsMsg{PR: 512})
 	if m.work.busy() {
-		t.Error("still spinning after the discussion landed")
+		t.Error("still spinning after both fetches landed")
 	}
 }
 
@@ -127,14 +145,15 @@ func TestPullRequestDetailSaysSoWhenTheFetchFails(t *testing.T) {
 
 	r.send(threadsLoadedMsg{PR: 512, Err: errTest})
 
-	if strings.Contains(r.frame(), "loading…") {
-		t.Errorf("the pane still claims to be loading:\n%s", r.frame())
+	if !strings.Contains(r.frame(), "could not load the discussion") {
+		t.Errorf("the discussion section does not report the failure:\n%s", r.frame())
 	}
 	if status, isErr := m.Status(); !isErr || !strings.Contains(status, errTest.Error()) {
 		t.Errorf("status = %q, isErr = %v", status, isErr)
 	}
+	r.send(linkedItemsMsg{PR: 512})
 	if m.work.busy() {
-		t.Error("still spinning after the fetch failed")
+		t.Error("still spinning after both fetches settled")
 	}
 }
 
@@ -214,7 +233,60 @@ func TestPullRequestsEnterCarriesThreadsItAlreadyFetched(t *testing.T) {
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	push := cmd().(PushMsg)
 
-	if init := initialise(push.View); init != nil {
-		t.Error("the detail view refetched a discussion the list already had")
+	detail, ok := push.View.(*PullRequestDetail)
+	if !ok {
+		t.Fatalf("pushed %T, want a PullRequestDetail", push.View)
+	}
+	if !detail.loaded {
+		t.Error("the detail view did not receive the discussion the list already had")
+	}
+}
+
+func TestPullRequestDetailShowsItsLinkedWorkItems(t *testing.T) {
+	m := newPRDetail(t, nil)
+	m.Init()
+	r := drive(t, m, 100, 60)
+
+	r.send(linkedItemsMsg{PR: 512, Items: []azdo.WorkItem{
+		{ID: 4021, Title: "Retry webhook delivery", State: "Active", Assigned: "Dev Example"},
+	}})
+
+	view := r.frame()
+	for _, want := range []string{"#4021", "Retry webhook delivery", "Active", "Dev Example"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the linked work items are missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestPullRequestDetailOpensItsLinkedWorkItem(t *testing.T) {
+	m := newPRDetail(t, nil)
+	m.Init()
+	r := drive(t, m, 100, 60)
+	r.send(linkedItemsMsg{PR: 512, Items: []azdo.WorkItem{{ID: 4021, Title: "Retry webhook delivery"}}})
+
+	cmd := r.send(runes("w"))
+	if cmd == nil {
+		t.Fatal("w produced no command")
+	}
+	push, ok := cmd().(PushMsg)
+	if !ok {
+		t.Fatalf("w produced %T, want a PushMsg", cmd())
+	}
+	if !strings.Contains(push.View.Title(), "#4021") {
+		t.Errorf("pushed %q, want the linked work item", push.View.Title())
+	}
+}
+
+func TestPullRequestDetailSaysSoWhenThereIsNoWorkItemToOpen(t *testing.T) {
+	m := newPRDetail(t, nil)
+	m.Init()
+	r := drive(t, m, 100, 60)
+	r.send(linkedItemsMsg{PR: 512})
+
+	r.send(runes("w"))
+
+	if status, _ := m.Status(); !strings.Contains(status, "no work items are linked") {
+		t.Errorf("status = %q, want w to explain that there is nothing to open", status)
 	}
 }

@@ -168,3 +168,22 @@ func voteStyle(vote int) lipgloss.Style {
 		return errStyle
 	}
 }
+
+// prStatusLabel reads a pull request's state the way a person would say it. A
+// draft is called out before its status because it is the more useful fact:
+// a draft is not waiting on anybody.
+func prStatusLabel(pr azdo.PullRequest) string {
+	if pr.IsDraft {
+		return "draft"
+	}
+	switch pr.Status {
+	case "completed":
+		return "merged"
+	case "abandoned":
+		return "abandoned"
+	case "", "active":
+		return "active"
+	default:
+		return pr.Status
+	}
+}

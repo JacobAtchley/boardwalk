@@ -44,13 +44,17 @@ func (r Reviewer) VoteLabel() string {
 
 // PullRequest is one active pull request, in any repository in the project.
 type PullRequest struct {
-	ID          int
-	Title       string
-	Repo        string
-	RepoID      string
-	Author      string
-	AuthorKey   string // uniqueName, lowercased, compared against Client.Me
-	IsDraft     bool
+	ID        int
+	Title     string
+	Repo      string
+	RepoID    string
+	Author    string
+	AuthorKey string // uniqueName, lowercased, compared against Client.Me
+	IsDraft   bool
+	// Status is active, completed or abandoned. The project-wide listing only
+	// asks for active ones, but a work item links to pull requests long after
+	// they merge.
+	Status      string
 	Source      string // full ref
 	Target      string // full ref
 	Created     time.Time
@@ -95,29 +99,7 @@ type ThreadCounts struct {
 // its repositories, newest first.
 func (c *Client) PullRequests() ([]PullRequest, error) {
 	var resp struct {
-		Value []struct {
-			ID        int       `json:"pullRequestId"`
-			Title     string    `json:"title"`
-			IsDraft   bool      `json:"isDraft"`
-			Source    string    `json:"sourceRefName"`
-			Target    string    `json:"targetRefName"`
-			Created   time.Time `json:"creationDate"`
-			Desc      string    `json:"description"`
-			CreatedBy struct {
-				DisplayName string `json:"displayName"`
-				UniqueName  string `json:"uniqueName"`
-			} `json:"createdBy"`
-			Repository struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
-			} `json:"repository"`
-			Reviewers []struct {
-				DisplayName string `json:"displayName"`
-				UniqueName  string `json:"uniqueName"`
-				Vote        int    `json:"vote"`
-				IsContainer bool   `json:"isContainer"`
-			} `json:"reviewers"`
-		} `json:"value"`
+		Value []pullRequestJSON `json:"value"`
 	}
 
 	endpoint := fmt.Sprintf(
@@ -129,34 +111,66 @@ func (c *Client) PullRequests() ([]PullRequest, error) {
 
 	prs := make([]PullRequest, 0, len(resp.Value))
 	for _, v := range resp.Value {
-		pr := PullRequest{
-			ID:          v.ID,
-			Title:       v.Title,
-			Repo:        v.Repository.Name,
-			RepoID:      v.Repository.ID,
-			Author:      v.CreatedBy.DisplayName,
-			AuthorKey:   strings.ToLower(v.CreatedBy.UniqueName),
-			IsDraft:     v.IsDraft,
-			Source:      v.Source,
-			Target:      v.Target,
-			Created:     v.Created,
-			Description: Markdown(v.Desc),
-		}
-		for _, r := range v.Reviewers {
-			pr.Reviewers = append(pr.Reviewers, Reviewer{
-				Name:    r.DisplayName,
-				Key:     strings.ToLower(r.UniqueName),
-				Vote:    r.Vote,
-				IsGroup: r.IsContainer,
-			})
-		}
-		prs = append(prs, pr)
+		prs = append(prs, v.pullRequest())
 	}
 
 	// The endpoint's own ordering is undocumented, so newest-first is enforced
 	// here rather than assumed.
 	sort.SliceStable(prs, func(i, j int) bool { return prs[i].Created.After(prs[j].Created) })
 	return prs, nil
+}
+
+// pullRequestJSON is the wire shape, shared by the project-wide listing and the
+// single fetch a linked pull request needs.
+type pullRequestJSON struct {
+	ID        int       `json:"pullRequestId"`
+	Title     string    `json:"title"`
+	IsDraft   bool      `json:"isDraft"`
+	Status    string    `json:"status"`
+	Source    string    `json:"sourceRefName"`
+	Target    string    `json:"targetRefName"`
+	Created   time.Time `json:"creationDate"`
+	Desc      string    `json:"description"`
+	CreatedBy struct {
+		DisplayName string `json:"displayName"`
+		UniqueName  string `json:"uniqueName"`
+	} `json:"createdBy"`
+	Repository struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"repository"`
+	Reviewers []struct {
+		DisplayName string `json:"displayName"`
+		UniqueName  string `json:"uniqueName"`
+		Vote        int    `json:"vote"`
+		IsContainer bool   `json:"isContainer"`
+	} `json:"reviewers"`
+}
+
+func (v pullRequestJSON) pullRequest() PullRequest {
+	pr := PullRequest{
+		ID:          v.ID,
+		Title:       v.Title,
+		Repo:        v.Repository.Name,
+		RepoID:      v.Repository.ID,
+		Author:      v.CreatedBy.DisplayName,
+		AuthorKey:   strings.ToLower(v.CreatedBy.UniqueName),
+		IsDraft:     v.IsDraft,
+		Status:      v.Status,
+		Source:      v.Source,
+		Target:      v.Target,
+		Created:     v.Created,
+		Description: Markdown(v.Desc),
+	}
+	for _, r := range v.Reviewers {
+		pr.Reviewers = append(pr.Reviewers, Reviewer{
+			Name:    r.DisplayName,
+			Key:     strings.ToLower(r.UniqueName),
+			Vote:    r.Vote,
+			IsGroup: r.IsContainer,
+		})
+	}
+	return pr
 }
 
 // Threads summarises one pull request's comment threads.

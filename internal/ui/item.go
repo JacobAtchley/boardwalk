@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,6 +30,14 @@ type commentsErrMsg struct {
 	Err error
 }
 
+// linkedPRsMsg carries the pull requests a work item links to. It names its
+// work item because Root broadcasts data to every view in the stack.
+type linkedPRsMsg struct {
+	ID  int
+	PRs []azdo.PullRequest
+	Err error
+}
+
 // Item is one work item in full: every field, and the whole discussion.
 //
 // The list's side pane is a summary — enough to recognise a row while moving
@@ -45,6 +54,12 @@ type Item struct {
 	// same in an empty slice.
 	loaded bool
 	failed bool
+
+	// linked are the pull requests this item is attached to — what the branch
+	// flow's link becomes once someone opens a pull request from that branch.
+	linked       []azdo.PullRequest
+	linkedLoaded bool
+	linkedErr    bool
 
 	// renderedAt is the width the pane was last laid out for. Glamour hard
 	// wraps, so a resize means rendering again rather than reflowing.
@@ -69,21 +84,61 @@ func NewItem(c *azdo.Client, wi azdo.WorkItem, comments []azdo.Comment) *Item {
 	}
 }
 
-// Init fetches the discussion unless one was handed over.
+// Init fetches what it does not already have. The two halves are independent:
+// the list hands over the discussion it cached but knows nothing about the
+// linked pull requests, so returning early on the discussion alone would leave
+// the links permanently unfetched.
 func (m *Item) Init() tea.Cmd {
-	if m.loaded {
+	var cmds []tea.Cmd
+	if !m.loaded {
+		cmds = append(cmds, m.fetchComments())
+	}
+	if !m.linkedLoaded {
+		cmds = append(cmds, m.fetchLinked())
+	}
+	if len(cmds) == 0 {
 		return nil
 	}
+	return tea.Batch(tea.Batch(cmds...), m.work.begin(len(cmds)))
+}
 
+func (m *Item) fetchComments() tea.Cmd {
 	client, id := m.client, m.item.ID
-	fetch := func() tea.Msg {
+	return func() tea.Msg {
 		comments, err := client.Comments(id)
 		if err != nil {
 			return commentsErrMsg{ID: id, Err: fmt.Errorf("could not load the discussion for #%d: %w", id, err)}
 		}
 		return commentsMsg{ID: id, Comments: comments}
 	}
-	return tea.Batch(fetch, m.work.begin(1))
+}
+
+// fetchLinked resolves the work item's pull request links. The relations name
+// them but carry nothing else, so each one is fetched: the project-wide listing
+// only holds active pull requests, and a work item stays linked to its pull
+// request long after it merges.
+func (m *Item) fetchLinked() tea.Cmd {
+	client, id := m.client, m.item.ID
+	return func() tea.Msg {
+		refs, err := client.WorkItemPullRequests(id)
+		if err != nil {
+			return linkedPRsMsg{ID: id, Err: fmt.Errorf("could not load the pull requests for #%d: %w", id, err)}
+		}
+
+		prs := make([]azdo.PullRequest, 0, len(refs))
+		for _, ref := range refs {
+			pr, err := client.PullRequestByID(ref.RepoID, ref.ID)
+			if err != nil {
+				// One unreadable link should not cost the others; a deleted
+				// repository is enough to produce it.
+				continue
+			}
+			prs = append(prs, pr)
+		}
+		// Newest first, so the p key opens the one most likely to be current.
+		sort.SliceStable(prs, func(i, j int) bool { return prs[i].Created.After(prs[j].Created) })
+		return linkedPRsMsg{ID: id, PRs: prs}
+	}
 }
 
 func (m *Item) Update(msg tea.Msg) (View, tea.Cmd) {
@@ -112,6 +167,20 @@ func (m *Item) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.invalidate()
 		return m, nil
 
+	case linkedPRsMsg:
+		if msg.ID != m.item.ID {
+			return m, nil
+		}
+		m.work.done()
+		m.linkedLoaded = true
+		if msg.Err != nil {
+			m.linkedErr, m.status = true, msg.Err.Error()
+		} else {
+			m.linked = msg.PRs
+		}
+		m.invalidate()
+		return m, nil
+
 	case StatusMsg:
 		m.status = msg.Text
 		return m, nil
@@ -128,7 +197,17 @@ func (m *Item) Update(msg tea.Msg) (View, tea.Cmd) {
 			return m, nil
 		case key.Matches(msg, keyRefresh):
 			m.loaded, m.failed = false, false
+			m.linkedLoaded, m.linkedErr = false, false
 			return m, m.Init()
+		case key.Matches(msg, keyLinkedPR):
+			// The newest link: a work item that has been through more than one
+			// pull request is almost always asking about its latest.
+			if len(m.linked) == 0 {
+				m.status = "no pull requests are linked to this work item"
+				return m, nil
+			}
+			detail := NewPullRequestDetail(m.client, m.linked[0], nil)
+			return m, func() tea.Msg { return PushMsg{View: detail} }
 		}
 
 		if status, handled := SharedAction(itemRow{m.item, m.client.WorkItemURL(m.item.ID)}, msg); handled {
@@ -187,6 +266,8 @@ func (m *Item) render(width int) string {
 	fmt.Fprintf(&b, "\n%s\n%s\n", labelStyle.Render("acceptance criteria"),
 		renderMarkdown(m.item.AcceptanceCriteria, "_none_", width))
 
+	m.renderLinked(&b, width)
+
 	fmt.Fprintf(&b, "\n%s\n", labelStyle.Render("discussion"))
 	switch {
 	case m.failed:
@@ -205,6 +286,32 @@ func (m *Item) render(width int) string {
 	return b.String()
 }
 
+// renderLinked writes the pull requests this item is attached to. It sits above
+// the discussion because it answers the question people open a work item to
+// ask: is anyone working on this, and did it ship.
+func (m *Item) renderLinked(b *strings.Builder, width int) {
+	fmt.Fprintf(b, "\n%s\n", labelStyle.Render("pull requests"))
+
+	switch {
+	case m.linkedErr:
+		fmt.Fprintf(b, "%s\n", errStyle.Render("could not load the links — press r to try again"))
+	case !m.linkedLoaded:
+		fmt.Fprintf(b, "%s\n", chromeStyle.Render(m.work.View()+"loading…"))
+	case len(m.linked) == 0:
+		fmt.Fprintf(b, "%s\n", chromeStyle.Render("(none linked)"))
+	default:
+		for i, pr := range m.linked {
+			marker := " "
+			if i == 0 {
+				marker = "▸" // what p opens
+			}
+			fmt.Fprintf(b, "%s %s\n", marker, truncate(fmt.Sprintf("!%d %s — %s → %s",
+				pr.ID, pr.Title, prStatusLabel(pr), shortRef(pr.Target)), width-2))
+		}
+		fmt.Fprintf(b, "%s\n", chromeStyle.Render("  p opens the first"))
+	}
+}
+
 func (m *Item) Title() string {
 	return fmt.Sprintf("#%d %s · %s/%s",
 		m.item.ID, m.item.Title, m.client.Org, m.client.Project)
@@ -212,7 +319,7 @@ func (m *Item) Title() string {
 
 // Keys omits the filter: there is nothing here to filter.
 func (m *Item) Keys() help.KeyMap {
-	own := []key.Binding{keyTop, keyBottom, keyRefresh}
+	own := []key.Binding{keyLinkedPR, keyTop, keyBottom, keyRefresh}
 	return keyMap{
 		short:  append(append([]key.Binding{}, own...), keyCopyID, keyBack, keyHelp),
 		groups: [][]key.Binding{own, {keyCopyID, keySlack, keyOpen}, navBindings()},

@@ -24,6 +24,8 @@ var (
 	keyBranch      = key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "branch"))
 	keyDrafts      = key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "drafts"))
 	keyReview      = key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "needs my review"))
+	keyLinkedPR    = key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "linked pull request"))
+	keyLinkedItem  = key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "linked work item"))
 	keyLogs        = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "logs"))
 	keyItem        = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open item"))
 	keyPullRequest = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open pull request"))
