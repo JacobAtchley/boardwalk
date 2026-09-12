@@ -172,8 +172,8 @@ func (c *Client) batch(ids []int) ([]WorkItem, error) {
 			State:              v.Fields.State,
 			Tags:               v.Fields.Tags,
 			Iteration:          v.Fields.Iteration,
-			Description:        StripHTML(v.Fields.Description),
-			AcceptanceCriteria: StripHTML(v.Fields.AcceptanceCriteria),
+			Description:        Markdown(v.Fields.Description),
+			AcceptanceCriteria: Markdown(v.Fields.AcceptanceCriteria),
 			Assigned:           "(unassigned)",
 		}
 		if v.Fields.AssignedTo != nil {

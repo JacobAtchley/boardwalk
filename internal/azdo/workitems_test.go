@@ -91,7 +91,9 @@ func TestBatchFieldsIncludeAcceptanceCriteria(t *testing.T) {
 	if !strings.Contains(body, "Microsoft.VSTS.Common.AcceptanceCriteria") {
 		t.Error("the batch request did not ask for acceptance criteria")
 	}
-	if items[0].AcceptanceCriteria != "Retries three times" {
-		t.Errorf("acceptance criteria = %q, want the HTML stripped", items[0].AcceptanceCriteria)
+	// Markdown, not flattened prose: a criteria list read as one paragraph is
+	// no use, and the detail view renders these through glamour.
+	if items[0].AcceptanceCriteria != "- Retries three times" {
+		t.Errorf("acceptance criteria = %q, want it converted to markdown", items[0].AcceptanceCriteria)
 	}
 }

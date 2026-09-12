@@ -41,7 +41,7 @@ func (c *Client) Comments(id int) ([]Comment, error) {
 		comments = append(comments, Comment{
 			Author:  v.CreatedBy.DisplayName,
 			Created: v.Created,
-			Text:    StripHTML(v.Text),
+			Text:    Markdown(v.Text),
 		})
 	}
 	return comments, nil
