@@ -95,9 +95,9 @@ type prsMsg struct{ PRs []azdo.PullRequest }
 // pull request because a slow fetch can land after the cursor has moved on,
 // and it carries Err rather than losing the row on a failed fetch.
 type threadsMsg struct {
-	PR     int
-	Counts azdo.ThreadCounts
-	Err    error
+	PR      int
+	Threads []azdo.Thread
+	Err     error
 }
 
 // PullRequests is the pull request browser.
@@ -105,8 +105,11 @@ type PullRequests struct {
 	client  *azdo.Client
 	browser Browser
 
-	prs     []azdo.PullRequest
-	counts  map[int]azdo.ThreadCounts
+	prs    []azdo.PullRequest
+	counts map[int]azdo.ThreadCounts
+	// threads keeps what the counts were derived from, so opening a pull
+	// request does not refetch a discussion the list already has.
+	threads map[int][]azdo.Thread
 	loading map[int]bool
 
 	drafts   draftFilter
@@ -136,6 +139,7 @@ func NewPullRequests(c *azdo.Client, reviewGroups []string) *PullRequests {
 		reviewGroups: reviewGroups,
 		browser:      NewBrowser(),
 		counts:       map[int]azdo.ThreadCounts{},
+		threads:      map[int][]azdo.Thread{},
 		work:         newWork(),
 		loading:      map[int]bool{},
 		repo:         azdo.CurrentRepo(),
@@ -224,8 +228,8 @@ func (m *PullRequests) fetchThreads() tea.Cmd {
 
 		client, repoID, prID := m.client, pr.RepoID, pr.ID
 		cmds = append(cmds, func() tea.Msg {
-			counts, err := client.Threads(repoID, prID)
-			return threadsMsg{PR: prID, Counts: counts, Err: err}
+			threads, err := client.Threads(repoID, prID)
+			return threadsMsg{PR: prID, Threads: threads, Err: err}
 		})
 	}
 	return tea.Batch(tea.Batch(cmds...), m.work.begin(len(cmds)))
@@ -252,7 +256,8 @@ func (m *PullRequests) Update(msg tea.Msg) (View, tea.Cmd) {
 			m.status, m.failed = fmt.Sprintf("could not load threads for !%d: %v", msg.PR, msg.Err), true
 			return m, nil
 		}
-		m.counts[msg.PR] = msg.Counts
+		m.threads[msg.PR] = msg.Threads
+		m.counts[msg.PR] = azdo.Summarize(msg.Threads)
 		m.applyFilters()
 		return m, nil
 
@@ -282,6 +287,15 @@ func (m *PullRequests) Update(msg tea.Msg) (View, tea.Cmd) {
 			m.drafts = (m.drafts + 1) % 3
 			m.applyFilters()
 			return m, m.fetchThreads()
+		case "enter":
+			if row, ok := m.browser.Selected(); ok {
+				if r, ok := row.(prRow); ok {
+					detail := NewPullRequestDetail(m.client, r.PullRequest, m.threads[r.ID])
+					return m, func() tea.Msg { return PushMsg{View: detail} }
+				}
+			}
+			return m, nil
+
 		case "v":
 			m.mineToReview = !m.mineToReview
 			m.applyFilters()
@@ -336,8 +350,9 @@ func (m *PullRequests) renderDetail(row Row, width int) string {
 	if r.counts != nil && len(r.counts.Open) > 0 {
 		fmt.Fprintf(&b, "\n%s\n", labelStyle.Render("unresolved"))
 		for _, t := range r.counts.Open {
+			opener := t.Opener()
 			fmt.Fprintf(&b, "\n%s\n%s\n",
-				labelStyle.Render(t.Author), wordwrap(t.Text, width))
+				labelStyle.Render(opener.Author), wordwrap(opener.Text, width))
 		}
 	}
 	return b.String()
@@ -375,7 +390,7 @@ func (m *PullRequests) Title() string {
 
 // Hints is the key line at the bottom.
 func (m *PullRequests) Keys() help.KeyMap {
-	return listKeys(keyReview, keyDrafts, keyScope)
+	return listKeys(keyPullRequest, keyReview, keyDrafts, keyScope)
 }
 
 // Status is the transient status line, or the fuzzy filter prompt while one is

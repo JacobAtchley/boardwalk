@@ -113,10 +113,11 @@ func TestThreadsCountsByStatusAndDropsSystemNoise(t *testing.T) {
 		]}`))
 	})
 
-	counts, err := c.Threads("r1", 512)
+	threads, err := c.Threads("r1", 512)
 	if err != nil {
 		t.Fatalf("Threads returned %v", err)
 	}
+	counts := Summarize(threads)
 	if counts.Unresolved != 2 {
 		t.Errorf("unresolved = %d, want 2 (active and pending)", counts.Unresolved)
 	}
@@ -126,7 +127,7 @@ func TestThreadsCountsByStatusAndDropsSystemNoise(t *testing.T) {
 	if len(counts.Open) != 2 {
 		t.Fatalf("got %d open threads, want 2", len(counts.Open))
 	}
-	if counts.Open[0].Author != "Other Dev" || counts.Open[0].Text != "Why the retry cap?" {
+	if counts.Open[0].Opener().Author != "Other Dev" || counts.Open[0].Opener().Text != "Why the retry cap?" {
 		t.Errorf("first open thread = %+v", counts.Open[0])
 	}
 }
@@ -136,10 +137,11 @@ func TestThreadsOnAPullRequestWithNoDiscussion(t *testing.T) {
 		w.Write([]byte(`{"value":[]}`))
 	})
 
-	counts, err := c.Threads("r1", 512)
+	threads, err := c.Threads("r1", 512)
 	if err != nil {
 		t.Fatalf("Threads returned %v", err)
 	}
+	counts := Summarize(threads)
 	if counts.Resolved != 0 || counts.Unresolved != 0 || len(counts.Open) != 0 {
 		t.Errorf("counts = %+v, want everything zero", counts)
 	}
@@ -177,5 +179,48 @@ func TestPullRequestsMarksGroupReviewers(t *testing.T) {
 	}
 	if !group.IsGroup {
 		t.Error("a group reviewer was not marked as one")
+	}
+}
+
+func TestThreadsKeepsTheWholeConversation(t *testing.T) {
+	// The list's column only needs a count, but the detail view reads a thread
+	// as an exchange — so the reply has to survive the fetch.
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"value":[
+		 {"id":1,"status":"active","isDeleted":false,
+		  "threadContext":{"filePath":"/internal/azdo/client.go"},
+		  "comments":[
+		    {"commentType":"system","content":"Dev added a reviewer","author":{"displayName":"Azure DevOps"}},
+		    {"commentType":"text","content":"Why the retry cap?","publishedDate":"2026-09-11T09:00:00Z","author":{"displayName":"Other Dev"}},
+		    {"commentType":"text","content":"Three felt right.","publishedDate":"2026-09-11T10:00:00Z","author":{"displayName":"Dev Example"}}]}
+		]}`))
+	})
+
+	threads, err := c.Threads("r1", 512)
+	if err != nil {
+		t.Fatalf("Threads returned %v", err)
+	}
+	if len(threads) != 1 {
+		t.Fatalf("got %d threads, want 1", len(threads))
+	}
+
+	th := threads[0]
+	if len(th.Comments) != 2 {
+		t.Fatalf("got %d comments, want the two real ones without the system entry", len(th.Comments))
+	}
+	if th.Comments[1].Text != "Three felt right." {
+		t.Errorf("the reply is missing: %+v", th.Comments)
+	}
+	if th.Comments[0].Created.IsZero() {
+		t.Error("publishedDate did not parse")
+	}
+	if th.File != "/internal/azdo/client.go" {
+		t.Errorf("file = %q, want the thread's anchor", th.File)
+	}
+	if th.Resolved {
+		t.Error("an active thread read as resolved")
+	}
+	if th.Opener().Author != "Other Dev" {
+		t.Errorf("Opener = %+v, want the first real comment", th.Opener())
 	}
 }

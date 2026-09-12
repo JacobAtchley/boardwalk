@@ -100,9 +100,13 @@ func TestPullRequestsThreadCountsRenderOnceFetched(t *testing.T) {
 		t.Error("an unfetched thread count did not render as an ellipsis")
 	}
 
-	updated, _ := m.Update(threadsMsg{PR: 512, Counts: azdo.ThreadCounts{
-		Resolved: 4, Unresolved: 2,
-		Open: []azdo.OpenThread{{Author: "Other Dev", Text: "Why the retry cap?"}},
+	updated, _ := m.Update(threadsMsg{PR: 512, Threads: []azdo.Thread{
+		{Status: "fixed", Resolved: true, Comments: []azdo.ThreadComment{{Author: "Dev Example", Text: "Done"}}},
+		{Status: "fixed", Resolved: true, Comments: []azdo.ThreadComment{{Author: "Dev Example", Text: "Done"}}},
+		{Status: "closed", Resolved: true, Comments: []azdo.ThreadComment{{Author: "Dev Example", Text: "Moot"}}},
+		{Status: "byDesign", Resolved: true, Comments: []azdo.ThreadComment{{Author: "Dev Example", Text: "Intended"}}},
+		{Status: "active", Comments: []azdo.ThreadComment{{Author: "Other Dev", Text: "Why the retry cap?"}}},
+		{Status: "pending", Comments: []azdo.ThreadComment{{Author: "Third Dev", Text: "Nit: naming"}}},
 	}})
 	m = updated.(*PullRequests)
 
@@ -243,7 +247,7 @@ func TestPullRequestsSpinsWhileLoadingAndStopsWhenItLands(t *testing.T) {
 	}
 
 	// One of the two answers. The spinner has to outlast it.
-	r.send(threadsMsg{PR: 512, Counts: azdo.ThreadCounts{Resolved: 4, Unresolved: 2}})
+	r.send(threadsMsg{PR: 512, Threads: threadsResolved(4, 2)})
 	if !m.work.busy() {
 		t.Error("stopped spinning after the first of two batched calls landed")
 	}
@@ -252,7 +256,7 @@ func TestPullRequestsSpinsWhileLoadingAndStopsWhenItLands(t *testing.T) {
 	}
 
 	// The last one. Now it stops.
-	r.send(threadsMsg{PR: 511, Counts: azdo.ThreadCounts{}})
+	r.send(threadsMsg{PR: 511, Threads: nil})
 	if m.work.busy() {
 		t.Error("still spinning after every batched call landed")
 	}
@@ -351,4 +355,19 @@ func TestPullRequestsReviewFilterSaysWhenNoGroupsAreConfigured(t *testing.T) {
 	if !strings.Contains(m.Title(), "no groups configured") {
 		t.Errorf("title = %q, want it to explain why the list is empty", m.Title())
 	}
+}
+
+// threadsResolved builds a discussion with the given tallies, for tests that
+// care about the counts rather than what was said.
+func threadsResolved(resolved, unresolved int) []azdo.Thread {
+	var out []azdo.Thread
+	for range resolved {
+		out = append(out, azdo.Thread{Status: "fixed", Resolved: true,
+			Comments: []azdo.ThreadComment{{Author: "Dev Example", Text: "Done"}}})
+	}
+	for range unresolved {
+		out = append(out, azdo.Thread{Status: "active",
+			Comments: []azdo.ThreadComment{{Author: "Other Dev", Text: "Waiting"}}})
+	}
+	return out
 }

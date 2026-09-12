@@ -110,9 +110,14 @@ comments rendered as markdown rather than flattened to prose.
 
 | key | |
 |---|---|
+| `enter` | open the full pull request |
 | `v` | only pull requests waiting on your review |
 | `d` | cycle drafts hidden → drafts only → all |
 | `^t` | toggle between this repository and the whole project |
+
+The side pane is a summary. `enter` opens the pull request itself: the
+description, every reviewer's vote, and every discussion — whole threads, not
+just the line each one opens with — unresolved first.
 
 `v` matches a pull request where you are a reviewer and have not voted, and
 excludes your own. A pull request can name a group as its reviewer rather than

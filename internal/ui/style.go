@@ -153,3 +153,18 @@ func newHelp() help.Model {
 	h.Styles.FullSeparator = chromeStyle
 	return h
 }
+
+// voteStyle colours a reviewer's vote: approvals read as done, a rejection or a
+// wait as something still owed.
+func voteStyle(vote int) lipgloss.Style {
+	switch {
+	case vote > 0:
+		return statusStyle
+	case vote == 0:
+		return chromeStyle
+	case vote > -10:
+		return warnStyle
+	default:
+		return errStyle
+	}
+}

@@ -58,18 +58,37 @@ type PullRequest struct {
 	Reviewers   []Reviewer
 }
 
-// OpenThread is the opening comment of an unresolved discussion, which is what
-// the detail pane shows.
-type OpenThread struct {
-	Author string
-	Text   string
+// ThreadComment is one comment in a pull request discussion.
+type ThreadComment struct {
+	Author  string
+	Created time.Time
+	Text    string
+}
+
+// Thread is one discussion on a pull request: the whole exchange, not just its
+// opening comment, because the detail view reads it as a conversation.
+type Thread struct {
+	Status   string
+	Resolved bool
+	// File is set when the thread is anchored to a line of the diff rather
+	// than to the pull request as a whole.
+	File     string
+	Comments []ThreadComment
+}
+
+// Opener is the comment a thread starts with, which is what a summary shows.
+func (t Thread) Opener() ThreadComment {
+	if len(t.Comments) == 0 {
+		return ThreadComment{}
+	}
+	return t.Comments[0]
 }
 
 // ThreadCounts summarises a pull request's discussion.
 type ThreadCounts struct {
 	Resolved   int
 	Unresolved int
-	Open       []OpenThread
+	Open       []Thread
 }
 
 // PullRequests lists every active pull request in the project, across all of
@@ -121,7 +140,7 @@ func (c *Client) PullRequests() ([]PullRequest, error) {
 			Source:      v.Source,
 			Target:      v.Target,
 			Created:     v.Created,
-			Description: StripHTML(v.Desc),
+			Description: Markdown(v.Desc),
 		}
 		for _, r := range v.Reviewers {
 			pr.Reviewers = append(pr.Reviewers, Reviewer{
@@ -141,14 +160,18 @@ func (c *Client) PullRequests() ([]PullRequest, error) {
 }
 
 // Threads summarises one pull request's comment threads.
-func (c *Client) Threads(repoID string, prID int) (ThreadCounts, error) {
+func (c *Client) Threads(repoID string, prID int) ([]Thread, error) {
 	var resp struct {
 		Value []struct {
 			Status    string `json:"status"`
 			IsDeleted bool   `json:"isDeleted"`
-			Comments  []struct {
-				Content     string `json:"content"`
-				CommentType string `json:"commentType"`
+			Context   *struct {
+				FilePath string `json:"filePath"`
+			} `json:"threadContext"`
+			Comments []struct {
+				Content     string    `json:"content"`
+				CommentType string    `json:"commentType"`
+				Published   time.Time `json:"publishedDate"`
 				Author      struct {
 					DisplayName string `json:"displayName"`
 				} `json:"author"`
@@ -161,40 +184,72 @@ func (c *Client) Threads(repoID string, prID int) (ThreadCounts, error) {
 		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project),
 		url.PathEscape(repoID), prID, APIVersion)
 	if err := c.get(endpoint, &resp); err != nil {
-		return ThreadCounts{}, err
+		return nil, err
 	}
 
-	var counts ThreadCounts
+	var threads []Thread
 	for _, t := range resp.Value {
 		if t.IsDeleted {
 			continue
 		}
 
 		// Azure DevOps files its own activity — reviewers added, the source
-		// branch updated — as threads. They carry no status and only system
-		// comments, and counting them would make every pull request look busy.
-		var first *OpenThread
+		// branch updated — as threads. They carry only system comments, and
+		// keeping them would make every pull request look busy with discussion
+		// nobody wrote.
+		thread := Thread{Status: t.Status, Resolved: resolvedStatus(t.Status)}
+		if t.Context != nil {
+			thread.File = t.Context.FilePath
+		}
 		for _, cm := range t.Comments {
 			if cm.CommentType == "system" {
 				continue
 			}
-			first = &OpenThread{Author: cm.Author.DisplayName, Text: StripHTML(cm.Content)}
-			break
+			thread.Comments = append(thread.Comments, ThreadComment{
+				Author:  cm.Author.DisplayName,
+				Created: cm.Published,
+				// Pull request comments are written in markdown, so this is a
+				// pass-through unless someone pasted HTML in.
+				Text: Markdown(cm.Content),
+			})
 		}
-		if first == nil {
+		if len(thread.Comments) == 0 {
 			continue
 		}
+		threads = append(threads, thread)
+	}
+	return threads, nil
+}
 
-		switch t.Status {
-		case "fixed", "closed", "wontFix", "byDesign":
+// Summarize counts a pull request's threads for the list's column, and keeps
+// the unresolved ones for its side pane.
+//
+// A thread whose status is neither resolved nor unresolved — one Azure DevOps
+// left unset — is counted in neither, on purpose: it is discussion that exists
+// but is not waiting on anybody.
+func Summarize(threads []Thread) ThreadCounts {
+	var counts ThreadCounts
+	for _, t := range threads {
+		switch {
+		case t.Resolved:
 			counts.Resolved++
-		case "active", "pending":
+		case unresolvedStatus(t.Status):
 			counts.Unresolved++
-			counts.Open = append(counts.Open, *first)
+			counts.Open = append(counts.Open, t)
 		}
 	}
-	return counts, nil
+	return counts
 }
+
+func resolvedStatus(s string) bool {
+	switch s {
+	case "fixed", "closed", "wontFix", "byDesign":
+		return true
+	}
+	return false
+}
+
+func unresolvedStatus(s string) bool { return s == "active" || s == "pending" }
 
 // PullRequestURL is the browser URL for a pull request.
 func (c *Client) PullRequestURL(repo string, id int) string {
