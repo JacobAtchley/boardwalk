@@ -8,15 +8,18 @@
 //	boardwalk -all       # include closed/done/resolved/removed
 //	boardwalk -dump      # print work item rows and exit, no TUI
 //
-// Reads AZDO_ORG and AZDO_PROJECT, and borrows the machine's existing
-// `az login` session for its token.
+// Everything boardwalk needs to know lives in one JSON file, at
+// ~/.config/boardwalk.json or wherever BOARDWALK_CONFIG points. It borrows the
+// machine's existing `az login` session for its token.
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
@@ -113,13 +116,39 @@ func parseCommandLine(args []string) (flags, error) {
 	return f, nil
 }
 
+// loadConfig reads the settings file and says what to do about it when it
+// cannot. This is the first thing a new user hits, and "AZDO_ORG must be set"
+// told them the name of a variable but not where to put it.
+func loadConfig() (config.Config, error) {
+	path, pathErr := config.Path()
+
+	cfg, err := config.Load()
+	if errors.Is(err, config.ErrMissing) {
+		return cfg, fmt.Errorf("no config file at %s\n\n  create it with:\n\n%s\n",
+			path, indent(config.Example()))
+	}
+	if err != nil {
+		return cfg, err
+	}
+	if pathErr == nil {
+		if err := cfg.Validate(path); err != nil {
+			return cfg, fmt.Errorf("%w\n\n  it should look like:\n\n%s\n", err, indent(config.Example()))
+		}
+	}
+	return cfg, nil
+}
+
+func indent(s string) string {
+	return "    " + strings.ReplaceAll(s, "\n", "\n    ")
+}
+
 func run(start string, mineOnly, all, dump, timing bool) error {
-	org, project := os.Getenv("AZDO_ORG"), os.Getenv("AZDO_PROJECT")
-	if org == "" || project == "" {
-		return fmt.Errorf("AZDO_ORG and AZDO_PROJECT must be set")
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
 	}
 
-	client, err := azdo.NewClient(org, project)
+	client, err := azdo.NewClient(cfg.Org, cfg.Project)
 	if err != nil {
 		return err
 	}
@@ -147,13 +176,6 @@ func run(start string, mineOnly, all, dump, timing bool) error {
 			fmt.Printf("%-7d %-18s %-16s %-20s %s\n", wi.ID, "["+wi.Type+"]", wi.State, wi.Assigned, wi.Title)
 		}
 		return nil
-	}
-
-	// The config is optional and only ever adds to what boardwalk knows, so a
-	// malformed one is worth reporting but not worth refusing to start over.
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "✗ %v\n", err)
 	}
 
 	root := ui.NewRoot(client, mineOnly, all, cfg.ReviewGroups, start)

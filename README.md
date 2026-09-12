@@ -37,10 +37,44 @@ says so rather than claiming the copy happened.
 
 ## Setup
 
-```sh
-export AZDO_ORG=my-org
-export AZDO_PROJECT=MyProject
+Everything boardwalk needs to know lives in one file at
+`~/.config/boardwalk.json`:
+
+```json
+{
+  "org": "my-org",
+  "project": "MyProject",
+  "reviewGroups": ["platform-devs"]
+}
 ```
+
+| key | |
+|---|---|
+| `org` | the Azure DevOps organisation — the first path segment of `https://dev.azure.com/{org}` |
+| `project` | the team project within it |
+| `reviewGroups` | teams and security groups you belong to, named as Azure DevOps displays them |
+
+`org` and `project` are required; boardwalk will tell you which is missing, and
+show you the shape, if either is absent.
+
+`reviewGroups` is what lets `v` in the pull request view find work assigned to a
+group rather than to you. A pull request can list a group as its reviewer, and
+nothing in the pull request payload says who is in that group — resolving it
+would mean the Graph API, a second host and a walk through nested memberships.
+Naming them here costs no requests and works offline, at the price of going
+stale when your memberships change.
+
+Set `BOARDWALK_CONFIG` to read the file from somewhere else, which is how to
+keep more than one — a second organisation, or a project you only visit
+occasionally:
+
+```sh
+BOARDWALK_CONFIG=~/.config/boardwalk.other.json boardwalk
+```
+
+`XDG_CONFIG_HOME` is honoured if you set it. The default is spelled `~/.config`
+on every platform rather than following the OS convention, which on macOS would
+put it under `~/Library/Application Support`.
 
 boardwalk implements no auth flow of its own. It asks the az CLI for a token
 against the Azure DevOps resource id and rides whatever session `az login`
@@ -129,7 +163,7 @@ request knows which work item it belongs to.
 `v` matches a pull request where you are a reviewer and have not voted, and
 excludes your own. A pull request can name a group as its reviewer rather than
 a person — `platform-devs` rather than you — and nothing in the pull request
-says who is in that group, so boardwalk has to be told. See Configuration.
+says who is in that group, so boardwalk has to be told. See Setup.
 
 ### Builds
 
