@@ -21,7 +21,10 @@ func renderBanner(width int) string {
 		return bannerRow.Render("boardwalk")
 	}
 
-	shades := []string{"39", "38", "37", "36", "30", "23"}
+	// Coral, deepening row by row. These are hex rather than palette indexes so
+	// the ramp stays coral on a truecolour terminal; lipgloss downsamples them
+	// on anything narrower.
+	shades := []string{"#FF9A80", "#FF8A6B", "#FF7F50", "#EE6B3F", "#D2553C", "#B54530"}
 	out := make([]string, len(lines))
 	for i, line := range lines {
 		out[i] = bannerRow.Foreground(shade(shades, i)).Render(line)

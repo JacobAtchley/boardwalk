@@ -18,6 +18,11 @@ var (
 	colWarn     = lipgloss.AdaptiveColor{Light: "130", Dark: "214"}
 	colDraft    = lipgloss.AdaptiveColor{Light: "97", Dark: "141"}
 
+	// colCoral belongs to the wordmark alone. It is deliberately not colAccent:
+	// the accent also colours every detail title, and the banner should be the
+	// one thing on screen wearing this colour.
+	colCoral = lipgloss.AdaptiveColor{Light: "#D2553C", Dark: "#FF7F50"}
+
 	chromeStyle = lipgloss.NewStyle().Foreground(colDim)
 	selectedRow = lipgloss.NewStyle().Foreground(colSelected).Bold(true)
 	normalRow   = lipgloss.NewStyle()
@@ -27,7 +32,7 @@ var (
 	errStyle    = lipgloss.NewStyle().Foreground(colErr)
 	warnStyle   = lipgloss.NewStyle().Foreground(colWarn)
 	draftStyle  = lipgloss.NewStyle().Foreground(colDraft)
-	bannerRow   = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
+	bannerRow   = lipgloss.NewStyle().Foreground(colCoral).Bold(true)
 	menuItem    = lipgloss.NewStyle().PaddingLeft(2)
 	menuPicked  = lipgloss.NewStyle().PaddingLeft(0).Foreground(colSelected).Bold(true)
 
