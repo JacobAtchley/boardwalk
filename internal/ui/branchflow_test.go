@@ -26,6 +26,38 @@ func rowLine(t *testing.T, m *WorkItems, id int) string {
 	return ""
 }
 
+// captureClipboard swaps the clipboard shell-out for one that records what it
+// was handed, so a test can read back the command the branch flow copied. The
+// returned pointer is empty until something copies.
+func captureClipboard(t *testing.T, err error) *string {
+	t.Helper()
+	var got string
+	before := copyToClipboard
+	copyToClipboard = func(s string) error {
+		got = s
+		return err
+	}
+	t.Cleanup(func() { copyToClipboard = before })
+	return &got
+}
+
+func TestCheckoutCommandFetchesChecksOutAndPulls(t *testing.T) {
+	got := CheckoutCommand("feature/4020-tidy")
+	want := "git fetch origin && git checkout feature/4020-tidy && git pull"
+	if got != want {
+		t.Errorf("CheckoutCommand = %q, want %q", got, want)
+	}
+}
+
+func TestCheckoutCommandQuotesNamesTheShellWouldActOn(t *testing.T) {
+	// Git allows & in a ref name; a shell pasted this unquoted would run the
+	// checkout in the background and then try to run "fixes" as a command.
+	got := CheckoutCommand("bugfix/4020-a&b")
+	if !strings.Contains(got, "'bugfix/4020-a&b'") {
+		t.Errorf("CheckoutCommand = %q, want the branch quoted", got)
+	}
+}
+
 func TestPickRepo(t *testing.T) {
 	repos := []azdo.Repo{
 		{ID: "r1", Name: "platform-api"},
@@ -95,11 +127,13 @@ func TestBranchDoneReportsEveryStep(t *testing.T) {
 	// picking up Active is evidence of the sync rather than a coincidence.
 	c, items := fixture()
 	m := sized(t, NewWorkItems(c, items, false, false))
+	copied := captureClipboard(t, nil)
 
 	updated, cmd := m.Update(branchDoneMsg{BranchResult{
 		Branch:    "feature/4020-tidy",
 		ID:        4020,
 		Steps:     []string{"created feature/4020-tidy", "set #4020 Active", "linked the branch"},
+		Created:   true,
 		Activated: true,
 	}})
 	m = updated.(*WorkItems)
@@ -113,8 +147,14 @@ func TestBranchDoneReportsEveryStep(t *testing.T) {
 			t.Errorf("status = %q, want it to mention %q", status, want)
 		}
 	}
-	if cmd == nil {
-		t.Error("a successful flow did not hand a checkout command to the shell")
+	if *copied != "git fetch origin && git checkout feature/4020-tidy && git pull" {
+		t.Errorf("clipboard = %q, want the checkout command", *copied)
+	}
+	if !strings.Contains(status, "copied") {
+		t.Errorf("status = %q, want it to say the command was copied", status)
+	}
+	if cmd != nil {
+		t.Error("the branch flow quit or started more work instead of staying put")
 	}
 	// The row itself has to show the new state, not just the status line.
 	if !strings.Contains(rowLine(t, m, 4020), "Active") {
@@ -128,11 +168,13 @@ func TestBranchDoneKeepsTheStepsThatSucceeded(t *testing.T) {
 	// state change included — even though the flow as a whole failed.
 	c, items := fixture()
 	m := sized(t, NewWorkItems(c, items, false, false))
+	copied := captureClipboard(t, nil)
 
 	updated, cmd := m.Update(branchDoneMsg{BranchResult{
 		Branch:    "feature/4020-tidy",
 		ID:        4020,
 		Steps:     []string{"created feature/4020-tidy", "set #4020 Active"},
+		Created:   true,
 		Activated: true,
 		Err:       errTest,
 	}})
@@ -146,7 +188,12 @@ func TestBranchDoneKeepsTheStepsThatSucceeded(t *testing.T) {
 		t.Errorf("status = %q, want the completed step still named", status)
 	}
 	if cmd != nil {
-		t.Error("a failed flow still handed a command to the shell")
+		t.Error("a failed flow started more work")
+	}
+	// The branch itself is on the server, so the checkout is still worth
+	// having even though the link step failed.
+	if !strings.Contains(*copied, "feature/4020-tidy") {
+		t.Errorf("clipboard = %q, want the checkout command for the branch that was created", *copied)
 	}
 	// The state change really happened on the server, so the row has to
 	// reflect it even though the flow overall reads as a failure.
@@ -161,6 +208,7 @@ func TestBranchDoneLeavesTheRowAloneWhenActivationNeverHappened(t *testing.T) {
 	c, items := fixture()
 	m := sized(t, NewWorkItems(c, items, false, false))
 	before := rowLine(t, m, 4020)
+	copied := captureClipboard(t, nil)
 
 	updated, _ := m.Update(branchDoneMsg{BranchResult{
 		Branch: "feature/4020-tidy",
@@ -169,8 +217,33 @@ func TestBranchDoneLeavesTheRowAloneWhenActivationNeverHappened(t *testing.T) {
 	}})
 	m = updated.(*WorkItems)
 
+	if *copied != "" {
+		t.Errorf("clipboard = %q, want nothing copied for a branch that was never created", *copied)
+	}
 	if got := rowLine(t, m, 4020); got != before {
 		t.Errorf("row for #4020 changed despite the state change never landing: %q, was %q", got, before)
+	}
+}
+
+func TestBranchDoneShowsTheCommandWhenTheClipboardRefuses(t *testing.T) {
+	// pbcopy can be missing or refuse. Saying "copied" then would leave the
+	// user pasting whatever was on the clipboard before, so the command goes
+	// on the status line to be read instead.
+	c, items := fixture()
+	m := sized(t, NewWorkItems(c, items, false, false))
+	captureClipboard(t, errTest)
+
+	updated, _ := m.Update(branchDoneMsg{BranchResult{
+		Branch:  "feature/4020-tidy",
+		ID:      4020,
+		Steps:   []string{"created feature/4020-tidy"},
+		Created: true,
+	}})
+	m = updated.(*WorkItems)
+
+	status, _ := m.Status()
+	if !strings.Contains(status, "git checkout feature/4020-tidy") {
+		t.Errorf("status = %q, want the checkout command spelled out", status)
 	}
 }
 

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
 	tea "github.com/charmbracelet/bubbletea"
@@ -12,11 +13,14 @@ import (
 // rather than reading as a clean failure. Activated is set structurally,
 // alongside the "set #%d Active" step, rather than recovered by matching that
 // step's text — so the row can be synced to the server even when the flow
-// fails on the link step afterward.
+// fails on the link step afterward. Created is set the same way: the checkout
+// command is worth handing over the moment the ref exists, whatever the rest
+// of the flow then does.
 type BranchResult struct {
 	Branch    string
 	ID        int
 	Steps     []string
+	Created   bool
 	Activated bool
 	Err       error
 }
@@ -60,6 +64,7 @@ func runBranchFlow(c *azdo.Client, id int, branch string, repo azdo.Repo) Branch
 		return res
 	}
 	res.Steps = append(res.Steps, fmt.Sprintf("created %s in %s", branch, repo.Name))
+	res.Created = true
 
 	if err := c.SetState(id, "Active"); err != nil {
 		res.Err = fmt.Errorf("could not set #%d Active: %w", id, err)
@@ -93,6 +98,37 @@ func branchCmd(c *azdo.Client, id int, branch string) tea.Cmd {
 		}
 		return branchDoneMsg{runBranchFlow(c, id, branch, repo)}
 	}
+}
+
+// CheckoutCommand is what the user pastes into another shell to land on a
+// branch boardwalk just created on the server. boardwalk cannot move the
+// working tree of a shell it is not running in — and quitting to hand the
+// command back to one meant losing the session — so the command goes on the
+// clipboard instead and boardwalk stays open.
+//
+// The pull is there for the case where the branch already existed and has
+// commits on it; on a ref created a moment ago it is a no-op.
+func CheckoutCommand(branch string) string {
+	return fmt.Sprintf("git fetch origin && git checkout %s && git pull", shellQuote(branch))
+}
+
+// shellQuote wraps a branch name in single quotes when it holds anything a
+// shell would act on. Git allows characters in a ref name that a shell treats
+// as syntax — & and ; among them — and this command is written to be pasted
+// into a prompt, so a name carrying one has to arrive as a single word.
+func shellQuote(s string) string {
+	if s != "" && !strings.ContainsFunc(s, func(r rune) bool {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return false
+		case r == '.' || r == '_' || r == '-' || r == '/':
+			return false
+		}
+		return true
+	}) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // stateCmd moves a work item to a state without the rest of the branch flow.

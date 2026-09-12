@@ -51,9 +51,6 @@ type Root struct {
 	help help.Model
 
 	width, height int
-
-	// command is printed on exit for the shell wrapper to put on the prompt.
-	command string
 }
 
 // NewRoot builds the root model. When start names a menu entry, that view is
@@ -79,9 +76,6 @@ func (r *Root) Init() tea.Cmd {
 	}
 	return initialise(r.stack[len(r.stack)-1])
 }
-
-// ShellCommand is what to print after the program exits, or an empty string.
-func (r *Root) ShellCommand() string { return r.command }
 
 // build constructs the view named by a menu entry's key, or nil for an
 // unrecognised name.
@@ -130,10 +124,6 @@ func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			r.stack = r.stack[:len(r.stack)-1]
 		}
 		return r, nil
-
-	case ShellCommandMsg:
-		r.command = msg.Command
-		return r, tea.Quit
 
 	case tea.KeyMsg:
 		if cmd, handled := r.key(msg); handled {

@@ -133,7 +133,7 @@ quits from anywhere, including while a prompt is open.
 | `enter` | open the full item |
 | `^t` | toggle between everyone's items and yours |
 | `a` | set the item Active |
-| `b` | create a branch, set the item Active, and link the branch to it |
+| `b` | create a branch, set the item Active, link the branch to it, and copy the checkout |
 
 The side pane is a summary — id, title, assignee, tags and iteration — so it
 stays readable while the cursor moves. `enter` opens the item itself: every
@@ -184,32 +184,25 @@ says who is in that group, so boardwalk has to be told. See Setup.
 A running build's logs append on their own every few seconds, and stop when the
 build finishes.
 
-## Shell integration
+## The branch flow
 
-A child process cannot change its parent's directory or drive its line editor,
-so the branch action prints a command rather than running it. Bind a widget
-that puts whatever boardwalk prints onto your prompt:
+`b` on a work item does the whole thing against the REST API — creates the
+branch off the repository's default branch, moves the item to Active, and links
+the branch to the item — then puts the checkout on your clipboard:
 
-```zsh
-boardwalk-widget() {
-  zle -I
-  local out
-  out=$(boardwalk)
-  if [[ -n "$out" ]]; then
-    BUFFER="$out"
-    CURSOR=${#BUFFER}
-    zle accept-line
-  else
-    zle reset-prompt
-  fi
-}
-zle -N boardwalk-widget
-bindkey -M emacs '^xw' boardwalk-widget
+```
+git fetch origin && git checkout feature/4021-retry-webhook-delivery-on-5xx && git pull
 ```
 
-`^x` is a good prefix because zsh leaves it unbound as a pure prefix — the
-chord fires immediately, with no `KEYTIMEOUT` wait and no fallback action to
-lose.
+boardwalk stays open. Open another shell, go to the repository, and paste. A
+child process cannot move its parent's working tree, so the checkout has to
+happen in a shell you are in — but that is no reason to lose the session you
+were in the middle of.
+
+The command is copied as soon as the branch exists on the server, even if the
+state change or the link then fails, since the branch is there either way. If
+`pbcopy` is missing or refuses, the command goes on the status line to be read
+off instead.
 
 ## Notes from building it
 

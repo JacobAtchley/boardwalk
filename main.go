@@ -179,15 +179,6 @@ func run(start string, mineOnly, all, dump, timing bool) error {
 	}
 
 	root := ui.NewRoot(client, mineOnly, all, cfg.ReviewGroups, start)
-	final, err := tea.NewProgram(root, tea.WithAltScreen()).Run()
-	if err != nil {
-		return err
-	}
-
-	// Anything the view wants the parent shell to run comes back on stdout for
-	// the shell wrapper to put on the prompt.
-	if r, ok := final.(*ui.Root); ok && r.ShellCommand() != "" {
-		fmt.Println(r.ShellCommand())
-	}
-	return nil
+	_, err = tea.NewProgram(root, tea.WithAltScreen()).Run()
+	return err
 }
