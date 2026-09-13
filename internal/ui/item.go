@@ -68,6 +68,18 @@ type Item struct {
 	status string
 	work   work
 	now    func() time.Time
+
+	// statePicker is non-nil while the state picker is open. See the type's
+	// own doc in statepicker.go; it holds the same modal discipline the
+	// branch prompt in workitems.go and the reply prompt in
+	// pullrequestdetail.go use for theirs.
+	statePicker *statePicker
+	// stateErr is set when the last state-change status was a rejected
+	// transition, and read alongside failed in Status. It is its own field
+	// rather than reusing failed, which render reads specifically to mean
+	// "the discussion did not load" — setting it for an unrelated state
+	// error would draw that section as broken when it never was.
+	stateErr bool
 }
 
 // NewItem builds the view. comments is whatever the list already had cached,
@@ -181,11 +193,60 @@ func (m *Item) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.invalidate()
 		return m, nil
 
+	case statesFetchedMsg:
+		// Named by id, the same broadcast discipline every message in this
+		// file already follows: the picker this landed for may have already
+		// been cancelled, or this pane may since have been sent back to the
+		// list and reopened on a different item.
+		if m.statePicker == nil || m.statePicker.itemID != msg.ID {
+			return m, nil
+		}
+		m.statePicker.resolve(msg)
+		return m, nil
+
+	case stateSetMsg:
+		if msg.ID != m.item.ID {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.status, m.stateErr = msg.Err.Error(), true
+			return m, nil
+		}
+		m.item.State = msg.State
+		m.status, m.stateErr = fmt.Sprintf("#%d is now %s", msg.ID, msg.State), false
+		m.invalidate()
+		return m, nil
+
 	case StatusMsg:
 		m.status = msg.Text
 		return m, nil
 
 	case tea.KeyMsg:
+		// The state picker owns every key while it is open, the same
+		// discipline the branch prompt (workitems.go) and the reply prompt
+		// (pullrequestdetail.go) use for theirs.
+		if m.statePicker != nil {
+			switch msg.String() {
+			case "esc":
+				m.statePicker = nil
+				m.status, m.stateErr = "", false
+			case "enter":
+				state, ok := m.statePicker.selected()
+				id := m.statePicker.itemID
+				m.statePicker = nil
+				if !ok {
+					return m, nil
+				}
+				m.status, m.stateErr = fmt.Sprintf("setting #%d %s…", id, state), false
+				return m, stateCmd(m.client, id, state)
+			case "up", "k":
+				m.statePicker.up()
+			case "down", "j":
+				m.statePicker.down()
+			}
+			return m, nil
+		}
+
 		switch {
 		case key.Matches(msg, keyBack):
 			return m, func() tea.Msg { return PopMsg{} }
@@ -199,6 +260,9 @@ func (m *Item) Update(msg tea.Msg) (View, tea.Cmd) {
 			m.loaded, m.failed = false, false
 			m.linkedLoaded, m.linkedErr = false, false
 			return m, m.Init()
+		case key.Matches(msg, keyState):
+			m.statePicker = newStatePicker(m.item.ID)
+			return m, statesCmd(m.client, m.item.ID, m.item.Type)
 		case key.Matches(msg, keyLinkedPR):
 			// The newest link: a work item that has been through more than one
 			// pull request is almost always asking about its latest.
@@ -319,7 +383,7 @@ func (m *Item) Title() string {
 
 // Keys omits the filter: there is nothing here to filter.
 func (m *Item) Keys() help.KeyMap {
-	own := []key.Binding{keyLinkedPR, keyTop, keyBottom, keyRefresh}
+	own := []key.Binding{keyState, keyLinkedPR, keyTop, keyBottom, keyRefresh}
 	return keyMap{
 		short:  append(append([]key.Binding{}, own...), keyCopyID, keyBack, keyHelp),
 		groups: [][]key.Binding{own, {keyCopyID, keySlack, keyOpen}, navBindings()},
@@ -327,7 +391,17 @@ func (m *Item) Keys() help.KeyMap {
 }
 
 func (m *Item) Status() (string, bool) {
-	return m.work.View() + m.status, m.failed
+	if m.statePicker != nil {
+		return m.statePicker.View(), false
+	}
+	return m.work.View() + m.status, m.failed || m.stateErr
+}
+
+// Prompting reports whether the state picker is open, so Root leaves esc and
+// q to it rather than treating them as navigation — the same reason
+// PullRequestDetail and WorkItems implement it for their own modal state.
+func (m *Item) Prompting() bool {
+	return m.statePicker != nil
 }
 
 // itemRow adapts the work item to the shared copy and open actions, which take

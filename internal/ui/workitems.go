@@ -65,6 +65,11 @@ type WorkItems struct {
 
 	// branchPrompt is non-nil while the branch name is being edited.
 	branchPrompt *textinput.Model
+
+	// statePicker is non-nil while the full state list is open. It and
+	// branchPrompt are never both set: each one's key (b, S) only reaches the
+	// switch below once neither modal state has already claimed the keyboard.
+	statePicker *statePicker
 }
 
 // NewWorkItems builds the work item browser. items may be empty, which means
@@ -209,6 +214,16 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.status, m.failed = fmt.Sprintf("#%d is now %s", msg.ID, msg.State), false
 		return m, nil
 
+	case statesFetchedMsg:
+		// Named by id, like every other broadcast message in this file: the
+		// picker this landed for may have already been cancelled, or reopened
+		// on a different row.
+		if m.statePicker == nil || m.statePicker.itemID != msg.ID {
+			return m, nil
+		}
+		m.statePicker.resolve(msg)
+		return m, nil
+
 	case tea.KeyMsg:
 		// The branch prompt owns every key while it is open, including esc
 		// and the letters that are otherwise actions — typing "o" into it
@@ -232,6 +247,30 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 			input, cmd := m.branchPrompt.Update(msg)
 			m.branchPrompt = &input
 			return m, cmd
+		}
+
+		// The state picker owns every key while it is open, the same
+		// discipline the branch prompt above uses for its own modal state.
+		if m.statePicker != nil {
+			switch msg.String() {
+			case "esc":
+				m.statePicker = nil
+				m.status, m.failed = "", false
+			case "enter":
+				state, ok := m.statePicker.selected()
+				id := m.statePicker.itemID
+				m.statePicker = nil
+				if !ok {
+					return m, nil
+				}
+				m.status, m.failed = fmt.Sprintf("setting #%d %s…", id, state), false
+				return m, stateCmd(m.client, id, state)
+			case "up", "k":
+				m.statePicker.up()
+			case "down", "j":
+				m.statePicker.down()
+			}
+			return m, nil
 		}
 
 		// While the filter prompt is open every key belongs to it, or typing
@@ -264,6 +303,13 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 			if it, ok := m.selected(); ok {
 				m.status, m.failed = fmt.Sprintf("setting #%d Active…", it.ID), false
 				return m, stateCmd(m.client, it.ID, "Active")
+			}
+			return m, nil
+
+		case "S":
+			if it, ok := m.selected(); ok {
+				m.statePicker = newStatePicker(it.ID)
+				return m, statesCmd(m.client, it.ID, it.Type)
 			}
 			return m, nil
 
@@ -377,15 +423,18 @@ func (m *WorkItems) Title() string {
 
 // Hints is the key line at the bottom.
 func (m *WorkItems) Keys() help.KeyMap {
-	return listKeys(keyItem, keyScope, keyActive, keyBranch)
+	return listKeys(keyItem, keyScope, keyActive, keyState, keyBranch)
 }
 
 // Status is the transient status line, or a prompt while one is open: the
-// branch prompt takes priority over the fuzzy filter since only one of the
-// two can be open at a time.
+// branch prompt and the state picker take priority over the fuzzy filter
+// since only one of the three can be open at a time.
 func (m *WorkItems) Status() (string, bool) {
 	if m.branchPrompt != nil {
 		return m.branchPrompt.View(), false
+	}
+	if m.statePicker != nil {
+		return m.statePicker.View(), false
 	}
 	if m.browser.Filtering() {
 		return m.browser.FilterView(), false
@@ -393,8 +442,8 @@ func (m *WorkItems) Status() (string, bool) {
 	return m.work.View() + m.status, m.failed
 }
 
-// Prompting reports whether a text prompt is open, so Root leaves esc and q to
-// the prompt rather than treating them as navigation.
+// Prompting reports whether a text prompt or the state picker is open, so
+// Root leaves esc and q to it rather than treating them as navigation.
 func (m *WorkItems) Prompting() bool {
-	return m.branchPrompt != nil || m.browser.Filtering()
+	return m.branchPrompt != nil || m.statePicker != nil || m.browser.Filtering()
 }
