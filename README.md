@@ -245,6 +245,10 @@ Features:
 - Search inside the log pane
 - Pull request creation from a work item's branch
 - Caching views in the menu, so re-entering one does not refetch the project
+- Queue, re-run and cancel a build from the builds view
+- `--json` output, so a dump can be piped into something else
+- A watch mode that polls for pull requests newly waiting on you
+- Resolving review groups through the Graph API instead of naming them in the config
 
 Known rough edges, none of them load-bearing:
 
@@ -262,3 +266,7 @@ Known rough edges, none of them load-bearing:
 - Lazily arriving rows scroll the detail pane back to the top.
 - A copy or open failure is reported, but the raw `exec` error is not always
   the clearest thing to read.
+
+## License
+
+MIT License. See the LICENSE file for full text.
