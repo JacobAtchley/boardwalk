@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -36,6 +37,16 @@ type linkedPRsMsg struct {
 	ID  int
 	PRs []azdo.PullRequest
 	Err error
+}
+
+// commentSentMsg carries the outcome of posting a new comment. It names its
+// work item for the same reason every message in this file does: Root
+// broadcasts data to every view in the stack, and the user may have moved on
+// to a different item before the round trip returns.
+type commentSentMsg struct {
+	ID      int
+	Comment azdo.Comment
+	Err     error
 }
 
 // Item is one work item in full: every field, and the whole discussion.
@@ -83,6 +94,17 @@ type Item struct {
 	// assignErr mirrors stateErr for the same reason, for an assign that
 	// failed or was refused before it was even attempted (an unknown Me).
 	assignErr bool
+
+	// commentPrompt is non-nil while a new comment is being typed, in the same
+	// shape as the reply prompt in pullrequestdetail.go — c means the same
+	// thing here: add to the discussion. It and statePicker are never both
+	// set: statePicker's own key handling below swallows every key while it
+	// is open, including c, so the prompt can only open once it is nil.
+	commentPrompt *textinput.Model
+	// commentErr mirrors stateErr and assignErr: its own flag rather than
+	// reusing failed, which render reads specifically for "the discussion did
+	// not load".
+	commentErr bool
 }
 
 // NewItem builds the view. comments is whatever the list already had cached,
@@ -153,6 +175,18 @@ func (m *Item) fetchLinked() tea.Cmd {
 		// Newest first, so the p key opens the one most likely to be current.
 		sort.SliceStable(prs, func(i, j int) bool { return prs[i].Created.After(prs[j].Created) })
 		return linkedPRsMsg{ID: id, PRs: prs}
+	}
+}
+
+// commentCmd posts text as a new comment on the item's discussion.
+func (m *Item) commentCmd(text string) tea.Cmd {
+	client, id := m.client, m.item.ID
+	return func() tea.Msg {
+		comment, err := client.AddComment(id, text)
+		if err != nil {
+			return commentSentMsg{ID: id, Err: fmt.Errorf("could not post the comment: %w", err)}
+		}
+		return commentSentMsg{ID: id, Comment: comment}
 	}
 }
 
@@ -233,11 +267,53 @@ func (m *Item) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.invalidate()
 		return m, nil
 
+	case commentSentMsg:
+		if msg.ID != m.item.ID {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.status, m.commentErr = msg.Err.Error(), true
+			return m, nil
+		}
+		// Appended in place rather than refetched, the same trade-off
+		// replySentMsg makes in pullrequestdetail.go: the discussion is a
+		// scrolling viewport (see Body), and a refetch's fresh SetContent
+		// would throw away the reader's place in it for a result — this one
+		// comment — that a second round trip cannot say anything new about.
+		m.comments = append(m.comments, msg.Comment)
+		m.status, m.commentErr = "comment posted", false
+		m.invalidate()
+		return m, nil
+
 	case StatusMsg:
 		m.status = msg.Text
 		return m, nil
 
 	case tea.KeyMsg:
+		// The comment prompt owns every key while it is open, including esc
+		// and the letters that are otherwise actions — typing "S" into it
+		// must add the letter, not open the state picker. Mirrors the reply
+		// prompt in pullrequestdetail.go.
+		if m.commentPrompt != nil {
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.commentPrompt = nil
+				m.status, m.commentErr = "", false
+				return m, nil
+			case tea.KeyEnter:
+				text := strings.TrimSpace(m.commentPrompt.Value())
+				m.commentPrompt = nil
+				if text == "" {
+					return m, nil
+				}
+				m.status, m.commentErr = "posting comment…", false
+				return m, m.commentCmd(text)
+			}
+			input, cmd := m.commentPrompt.Update(msg)
+			m.commentPrompt = &input
+			return m, cmd
+		}
+
 		// The state picker owns every key while it is open, the same
 		// discipline the branch prompt (workitems.go) and the reply prompt
 		// (pullrequestdetail.go) use for theirs.
@@ -279,6 +355,12 @@ func (m *Item) Update(msg tea.Msg) (View, tea.Cmd) {
 		case key.Matches(msg, keyState):
 			m.statePicker = newStatePicker(m.item.ID)
 			return m, statesCmd(m.client, m.item.ID, m.item.Type)
+		case key.Matches(msg, keyComment):
+			input := textinput.New()
+			input.Prompt = "comment: "
+			input.Focus()
+			m.commentPrompt = &input
+			return m, textinput.Blink
 		case key.Matches(msg, keyAssign):
 			// An empty Me means az account show failed at startup — sending it
 			// as the assignee would unassign the item instead of claiming it,
@@ -358,7 +440,7 @@ func (m *Item) render(width int) string {
 
 	m.renderLinked(&b, width)
 
-	fmt.Fprintf(&b, "\n%s\n", labelStyle.Render("discussion"))
+	fmt.Fprintf(&b, "\n%s%s\n", labelStyle.Render("discussion"), chromeStyle.Render("  c comments"))
 	switch {
 	case m.failed:
 		fmt.Fprintf(&b, "%s\n", errStyle.Render("could not load the discussion — press r to try again"))
@@ -409,25 +491,34 @@ func (m *Item) Title() string {
 
 // Keys omits the filter: there is nothing here to filter.
 func (m *Item) Keys() help.KeyMap {
-	own := []key.Binding{keyState, keyAssign, keyLinkedPR, keyTop, keyBottom, keyRefresh}
+	own := []key.Binding{keyComment, keyState, keyAssign, keyLinkedPR, keyTop, keyBottom, keyRefresh}
 	return keyMap{
 		short:  append(append([]key.Binding{}, own...), keyCopyID, keyBack, keyHelp),
 		groups: [][]key.Binding{own, {keyCopyID, keySlack, keyOpen}, navBindings()},
 	}
 }
 
+// Status shows the comment prompt in place of the transient line while it is
+// open, the same swap the reply prompt makes in pullrequestdetail.go. The
+// state picker takes precedence over the transient line too, and the two can
+// never both be open — see commentPrompt's own doc — so checking one after
+// the other is unambiguous.
 func (m *Item) Status() (string, bool) {
+	if m.commentPrompt != nil {
+		return m.commentPrompt.View(), false
+	}
 	if m.statePicker != nil {
 		return m.statePicker.View(), false
 	}
-	return m.work.View() + m.status, m.failed || m.stateErr || m.assignErr
+	return m.work.View() + m.status, m.failed || m.stateErr || m.assignErr || m.commentErr
 }
 
-// Prompting reports whether the state picker is open, so Root leaves esc and
-// q to it rather than treating them as navigation — the same reason
-// PullRequestDetail and WorkItems implement it for their own modal state.
+// Prompting reports whether the state picker or the comment prompt is open,
+// so Root leaves esc and q to this view rather than treating them as
+// navigation — the same reason PullRequestDetail and WorkItems implement it
+// for their own modal state.
 func (m *Item) Prompting() bool {
-	return m.statePicker != nil
+	return m.statePicker != nil || m.commentPrompt != nil
 }
 
 // itemRow adapts the work item to the shared copy and open actions, which take
