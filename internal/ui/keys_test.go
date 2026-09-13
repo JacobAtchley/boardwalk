@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/JacobAtchley/boardwalk/internal/azdo"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 )
@@ -41,6 +42,9 @@ func TestEveryBindingCarriesHelpText(t *testing.T) {
 		"refresh": keyRefresh, "back": keyBack, "quit": keyQuit, "help": keyHelp,
 		"scope": keyScope, "active": keyActive, "assign": keyAssign, "set state": keyState, "branch": keyBranch,
 		"drafts": keyDrafts, "logs": keyLogs, "top": keyTop, "bottom": keyBottom,
+		"review": keyReview, "linked pull request": keyLinkedPR, "linked work item": keyLinkedItem,
+		"item": keyItem, "pull request": keyPullRequest, "reply": keyReply, "resolve": keyResolve,
+		"comment": keyComment, "diff": keyDiff, "approve": keyApprove, "wait": keyWait, "reject": keyReject,
 	} {
 		h := b.Help()
 		if h.Key == "" || h.Desc == "" {
@@ -78,5 +82,94 @@ func TestTheFullPanelCarriesKeysTheShortLineOmits(t *testing.T) {
 	}
 	if strings.Contains(line, "detail up") {
 		t.Error("the short line carries a key meant for the panel; it will not fit")
+	}
+}
+
+// renderShortHelp runs a view's short help through the real help component at
+// a given terminal width, the same rendering root.go does — help.ShortHelpView
+// truncates in place, silently dropping whatever does not fit rather than
+// wrapping it, so measuring string length is not a substitute for this.
+func renderShortHelp(km help.KeyMap, width int) string {
+	h := help.New()
+	h.Width = width
+	return h.ShortHelpView(km.ShortHelp())
+}
+
+// TestPullRequestDetailAndItemShortHelpSurviveOrdinaryWidths guards the branch
+// review's Finding 1: eight tasks each added one or two bindings to these two
+// views' own key sets, each addition reasonable in isolation, and the short
+// line grew to thirteen and ten bindings respectively — long enough that at 80
+// columns (and still at 120) esc and ? were truncated off the end before a
+// user ever saw them. keys.go's own listKeys documents why that must not
+// happen: back is the only way out of a view, and a user who cannot see it has
+// to guess.
+func TestPullRequestDetailAndItemShortHelpSurviveOrdinaryWidths(t *testing.T) {
+	views := map[string]help.KeyMap{
+		"pull request detail": newPRDetail(t, nil).Keys(),
+		"item":                newItem(t, nil).Keys(),
+	}
+	for name, km := range views {
+		t.Run(name, func(t *testing.T) {
+			for _, width := range []int{80, 120} {
+				line := renderShortHelp(km, width)
+				if !strings.Contains(line, "esc back") {
+					t.Errorf("width %d: short help = %q, missing \"esc back\"", width, line)
+				}
+				if !strings.Contains(line, "? keys") {
+					t.Errorf("width %d: short help = %q, missing \"? keys\"", width, line)
+				}
+			}
+		})
+	}
+}
+
+// viewKeyMaps builds the key map every view in boardwalk currently ships,
+// keyed by name, so the bindings tests below are data-driven over them: a
+// ninth view added after this one is covered automatically rather than
+// needing one of these tests edited to know about it.
+func viewKeyMaps(t *testing.T) map[string]help.KeyMap {
+	t.Helper()
+	itemsClient, items := fixture()
+	return map[string]help.KeyMap{
+		"work items":          NewWorkItems(itemsClient, items, false, false).Keys(),
+		"pull requests":       newPRs(t).Keys(),
+		"builds":              newBuilds(t).Keys(),
+		"logs":                newLogs(t, azdo.StatusSucceeded).Keys(),
+		"pull request detail": newPRDetail(t, nil).Keys(),
+		"item":                newItem(t, nil).Keys(),
+		"pull request diff":   newPRDiff(t).view.Keys(),
+	}
+}
+
+// TestNoViewBindsTwoActionsToTheSameKey is Finding 4: twelve bindings were
+// allocated across eight tasks by hand, and nothing checked that two of them
+// never landed on the same key within one view. Two bindings sharing a key
+// across different views is fine and expected — c means reply on the pull
+// request detail view and comment on the item view, enter means something on
+// every view — so a key is only flagged when two DIFFERENT actions inside the
+// SAME view's key map both claim it, which is what would make the second one
+// unreachable.
+func TestNoViewBindsTwoActionsToTheSameKey(t *testing.T) {
+	for name, km := range viewKeyMaps(t) {
+		t.Run(name, func(t *testing.T) {
+			claimedBy := map[string]string{} // physical key -> the description already claiming it
+			claim := func(b key.Binding) {
+				desc := b.Help().Desc
+				for _, physicalKey := range b.Keys() {
+					if by, ok := claimedBy[physicalKey]; ok && by != desc {
+						t.Errorf("%q is bound to both %q and %q", physicalKey, by, desc)
+					}
+					claimedBy[physicalKey] = desc
+				}
+			}
+			for _, b := range km.ShortHelp() {
+				claim(b)
+			}
+			for _, group := range km.FullHelp() {
+				for _, b := range group {
+					claim(b)
+				}
+			}
+		})
 	}
 }

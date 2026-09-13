@@ -450,6 +450,54 @@ func TestShortPathKeepsTheFileName(t *testing.T) {
 	}
 }
 
+func TestPullRequestDiffRefreshIsNotPinnedByAFetchThatWasAlreadyInFlight(t *testing.T) {
+	// Finding 3 from the branch review: the cursor sits on a file whose fetch
+	// is already in flight when refresh is pressed. clear(m.diffs) empties the
+	// map, but the in-flight fetch answers a moment later — before the
+	// refreshed file list has come back to trigger a fresh one — and lands
+	// carrying the same path. Storing it would win the race against the
+	// refresh: fetchSelected would then find the path already present once the
+	// new list landed and never ask again, silently keeping the reader on the
+	// diff refresh was trying to replace.
+	r := newPRDiff(t, azdo.Change{Path: "/a.go", ChangeType: "edit"})
+	if !r.view.loading["/a.go"] {
+		t.Fatal("the fixture did not leave the selected file's fetch in flight")
+	}
+
+	r.send(runes("r"))
+	if r.view.generation == 0 {
+		t.Fatal("refresh did not advance the generation")
+	}
+
+	// The fetch that started before refresh was pressed lands now, still
+	// carrying the generation it was issued under.
+	r.send(fileDiffMsg{PR: 512, Path: "/a.go", Diff: fileDiff{hunks: longHunk("stale")}, generation: 0})
+
+	if _, ok := r.view.diffs["/a.go"]; ok {
+		t.Fatal("a diff issued before the refresh was stored after it")
+	}
+	if strings.Count(r.frame(), "·") == 0 {
+		t.Errorf("the row lost its pending marker to a diff refresh discarded:\n%s", r.frame())
+	}
+
+	// The refreshed file list now lands and must still ask for the file again
+	// — the stale answer must not have left it looking already read.
+	r.send(prChangesMsg{PR: 512, Changes: []azdo.Change{{Path: "/a.go", ChangeType: "edit"}}})
+	if !r.view.loading["/a.go"] {
+		t.Fatal("the refreshed list did not refetch a file a stale diff had wrongly marked as read")
+	}
+
+	// And the answer to that real fetch, carrying the current generation, is
+	// the one that is allowed to land.
+	r.send(fileDiffMsg{PR: 512, Path: "/a.go", Diff: fileDiff{hunks: longHunk("fresh")}, generation: r.view.generation})
+	if _, ok := r.view.diffs["/a.go"]; !ok {
+		t.Error("a diff carrying the current generation was not stored")
+	}
+	if !strings.Contains(r.frame(), "fresh line 1") {
+		t.Errorf("the current generation's diff did not render:\n%s", r.frame())
+	}
+}
+
 func TestPullRequestDiffRefreshDiscardsWhatItRead(t *testing.T) {
 	r := newPRDiff(t, azdo.Change{Path: "/a.go", ChangeType: "edit"})
 	r.send(fileDiffMsg{PR: 512, Path: "/a.go", Diff: fileDiff{note: "binary file — not shown"}})

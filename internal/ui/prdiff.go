@@ -154,10 +154,20 @@ type prChangesMsg struct {
 
 // fileDiffMsg carries one file's diff, named by path because a slow fetch can
 // land long after the cursor has moved off the row that asked for it.
+//
+// generation is stamped with the view's generation counter at the moment the
+// fetch was issued, unexported because nothing outside this file has a
+// reason to set it to anything but the zero value a fresh fetch is compared
+// against. Path alone is not enough to tell a stale answer from a current
+// one: refresh clears diffs and loading and asks again for the same path, so
+// a diff that was already in flight when refresh was pressed lands with a
+// path that matches perfectly and content that belongs to the fetch refresh
+// just superseded.
 type fileDiffMsg struct {
-	PR   int
-	Path string
-	Diff fileDiff
+	PR         int
+	Path       string
+	Diff       fileDiff
+	generation int
 }
 
 // PullRequestDiff is the code behind a pull request: the changed files as a
@@ -170,6 +180,11 @@ type PullRequestDiff struct {
 	changes []azdo.Change
 	diffs   map[string]fileDiff
 	loading map[string]bool
+
+	// generation counts refreshes. Bumped before Init re-fetches the file
+	// list, it is what lets fileDiffMsg tell a fetch issued before the refresh
+	// apart from one issued after — see fileDiffMsg's doc.
+	generation int
 
 	loaded bool
 	status string
@@ -270,12 +285,14 @@ func (m *PullRequestDiff) fetchSelected() tea.Cmd {
 	client, repo, prID := m.client, m.pr.RepoID, m.pr.ID
 	path, changeType := r.Path, r.ChangeType
 	oldSHA, newSHA := m.pr.TargetCommit, m.pr.SourceCommit
+	gen := m.generation
 
 	fetch := func() tea.Msg {
 		return fileDiffMsg{
-			PR:   prID,
-			Path: path,
-			Diff: buildFileDiff(client, repo, path, changeType, oldSHA, newSHA),
+			PR:         prID,
+			Path:       path,
+			Diff:       buildFileDiff(client, repo, path, changeType, oldSHA, newSHA),
+			generation: gen,
 		}
 	}
 	return tea.Batch(fetch, m.work.begin(1))
@@ -370,9 +387,23 @@ func (m *PullRequestDiff) Update(msg tea.Msg) (View, tea.Cmd) {
 		if msg.PR != m.pr.ID {
 			return m, nil
 		}
+		// work.done() runs regardless of generation: this fetch was counted
+		// when it was issued, and a refresh does not un-issue it, so skipping
+		// this would leave the spinner counting a fetch that will never
+		// answer again.
+		m.work.done()
+		if msg.generation != m.generation {
+			// Superseded by a refresh. Storing this anyway would win the race
+			// against the fetch refresh just issued for the same path: this
+			// answer would land in m.diffs first, and fetchSelected would then
+			// find the path already present and never ask again — refresh
+			// would silently keep the reader on the diff it was trying to
+			// replace. Dropping it leaves the path exactly as refresh left it,
+			// pending, until the current generation's own fetch answers.
+			return m, nil
+		}
 		// Cleared before anything else: a fetch that failed must still leave
 		// the path free to be asked for again, rather than stuck loading.
-		m.work.done()
 		delete(m.loading, msg.Path)
 
 		m.diffs[msg.Path] = msg.Diff
@@ -390,10 +421,14 @@ func (m *PullRequestDiff) Update(msg tea.Msg) (View, tea.Cmd) {
 		}
 		return m, nil
 
-	case ErrMsg:
-		m.work.done()
-		m.status, m.failed = msg.Err.Error(), true
-		return m, nil
+	// No case for ErrMsg here on purpose. This view never emits one — its own
+	// failures are prChangesMsg.Err and fileDiffMsg.Diff.err, both named by
+	// pull request or path — so ErrMsg reaching Update is always another
+	// view's fetch failing lower in the stack. Root broadcasts it exactly like
+	// every other data message (see topOnly in root.go); reacting to it here
+	// used to mean printing someone else's error over this view's own status
+	// line and decrementing this view's work counter for a fetch this view
+	// never started, which left the actual owner spinning forever.
 
 	case StatusMsg:
 		m.status, m.failed = msg.Text, msg.Err
@@ -418,6 +453,10 @@ func (m *PullRequestDiff) Update(msg tea.Msg) (View, tea.Cmd) {
 			// file list lands.
 			clear(m.diffs)
 			clear(m.loading)
+			// Bumped so any fileDiffMsg already in flight from before this
+			// refresh is recognisable as stale when it lands — see
+			// fileDiffMsg's doc and the generation check in its case above.
+			m.generation++
 			m.status, m.failed = "refreshing…", false
 			return m, m.Init()
 		}

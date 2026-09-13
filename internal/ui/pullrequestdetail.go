@@ -649,11 +649,25 @@ func (m *PullRequestDetail) Title() string {
 }
 
 // Keys omits the filter: there is nothing here to filter.
+//
+// The short line carries only the four bindings this view exists for; voting,
+// jumping to either end of the pager, refreshing and copying the id are still
+// one keystroke away, but behind "?" rather than on the line itself. Eight
+// tasks each added one or two keys to this view's own set by hand, and every
+// review looked reasonable in isolation — the branch review that looked at
+// all of them together found the short line had grown to thirteen bindings
+// with descriptions long enough ("linked work item", not just "linked") that
+// even trimming it to Diff, the link, reply, resolve and just refresh still
+// pushed esc and ? off the end of it at 80 columns. See
+// TestPullRequestDetailAndItemShortHelpSurviveOrdinaryWidths in keys_test.go,
+// which renders through the real help component rather than trusting a
+// character count.
 func (m *PullRequestDetail) Keys() help.KeyMap {
-	own := []key.Binding{keyDiff, keyLinkedItem, keyReply, keyResolve, keyApprove, keyWait, keyReject, keyTop, keyBottom, keyRefresh}
+	short := []key.Binding{keyDiff, keyLinkedItem, keyReply, keyResolve}
+	full := []key.Binding{keyDiff, keyLinkedItem, keyReply, keyResolve, keyApprove, keyWait, keyReject, keyTop, keyBottom, keyRefresh}
 	return keyMap{
-		short:  append(append([]key.Binding{}, own...), keyCopyID, keyBack, keyHelp),
-		groups: [][]key.Binding{own, {keyCopyID, keySlack, keyOpen}, navBindings()},
+		short:  append(append([]key.Binding{}, short...), keyBack, keyHelp),
+		groups: [][]key.Binding{full, {keyCopyID, keySlack, keyOpen}, navBindings()},
 	}
 }
 

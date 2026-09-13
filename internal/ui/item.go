@@ -490,11 +490,20 @@ func (m *Item) Title() string {
 }
 
 // Keys omits the filter: there is nothing here to filter.
+//
+// The short line carries only comment, set state and assign; opening the
+// linked pull request, jumping to either end of the pager, refreshing and
+// copying the id are still one keystroke away, but behind "?" rather than on
+// the line itself. See the matching comment on PullRequestDetail.Keys: the
+// same eight-tasks-by-hand growth pushed esc and ? off the short line here
+// too, and "linked pull request" is long enough on its own that even the
+// four view-specific bindings alone still overflowed 80 columns.
 func (m *Item) Keys() help.KeyMap {
-	own := []key.Binding{keyComment, keyState, keyAssign, keyLinkedPR, keyTop, keyBottom, keyRefresh}
+	short := []key.Binding{keyComment, keyState, keyAssign}
+	full := []key.Binding{keyComment, keyState, keyAssign, keyLinkedPR, keyTop, keyBottom, keyRefresh}
 	return keyMap{
-		short:  append(append([]key.Binding{}, own...), keyCopyID, keyBack, keyHelp),
-		groups: [][]key.Binding{own, {keyCopyID, keySlack, keyOpen}, navBindings()},
+		short:  append(append([]key.Binding{}, short...), keyBack, keyHelp),
+		groups: [][]key.Binding{full, {keyCopyID, keySlack, keyOpen}, navBindings()},
 	}
 }
 

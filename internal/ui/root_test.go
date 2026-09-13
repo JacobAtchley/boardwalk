@@ -291,6 +291,45 @@ func TestRootDeliversDataToAViewThatIsNotOnTop(t *testing.T) {
 	}
 }
 
+func TestRootBroadcastsErrMsgToTheViewItBelongsToEvenWhenNotOnTop(t *testing.T) {
+	// Finding 2 from the branch review: refresh the pull request list, drill
+	// into detail, press D to open the diff, and let the list's own fetch
+	// fail. ErrMsg used to reach the top view alone, so the diff view — which
+	// never emits one — printed the list's error over its own status line and
+	// decremented its own work counter for a fetch that was never its, while
+	// PullRequests, the view that actually asked, never heard back and spun
+	// forever.
+	c, prs := prFixture()
+	r := NewRoot(c, false, false, nil, "prs")
+	updated, _ := r.Update(tea.WindowSizeMsg{Width: 140, Height: 30})
+	r = updated.(*Root)
+	updated, _ = r.Update(prsMsg{PRs: prs})
+	r = updated.(*Root)
+
+	updated, _ = r.Update(PushMsg{View: NewPullRequestDetail(c, prs[0], []azdo.Thread{})})
+	r = updated.(*Root)
+	diff := NewPullRequestDiff(c, prs[0])
+	updated, _ = r.Update(PushMsg{View: diff})
+	r = updated.(*Root)
+
+	updated, _ = r.Update(ErrMsg{Err: errTest})
+	r = updated.(*Root)
+
+	if status, isErr := diff.Status(); isErr || strings.Contains(status, errTest.Error()) {
+		t.Errorf("the diff view reacted to another view's error: status = %q, isErr = %v", status, isErr)
+	}
+	prList, ok := r.stack[0].(*PullRequests)
+	if !ok {
+		t.Fatalf("stack[0] = %T, want *PullRequests", r.stack[0])
+	}
+	if status, isErr := prList.Status(); !isErr || !strings.Contains(status, errTest.Error()) {
+		t.Errorf("the pull request list never heard about its own fetch failing: status = %q, isErr = %v", status, isErr)
+	}
+	if prList.work.busy() {
+		t.Error("the pull request list is still spinning after its failure landed")
+	}
+}
+
 func TestRootKeepsTheStatusLineForTheViewOnTop(t *testing.T) {
 	// A hidden view must not write the status line: the user would read it as
 	// describing whatever is actually on screen.
