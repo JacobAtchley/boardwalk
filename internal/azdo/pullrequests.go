@@ -75,6 +75,14 @@ type PullRequest struct {
 	Created     time.Time
 	Description string
 	Reviewers   []Reviewer
+	// SourceCommit and TargetCommit are the two commits the diff view reads a
+	// file at. They are the *merge* commits Azure DevOps maintains, not the tips
+	// of the two branches: the target tip moves as other work merges, and
+	// diffing against it would show this pull request as also containing
+	// everybody else's. Both are empty on a pull request whose merge Azure
+	// DevOps has not computed yet — a conflicted one, or one only just opened.
+	SourceCommit string
+	TargetCommit string
 }
 
 // ThreadComment is one comment in a pull request discussion.
@@ -156,6 +164,12 @@ type pullRequestJSON struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"repository"`
+	LastMergeSourceCommit struct {
+		CommitID string `json:"commitId"`
+	} `json:"lastMergeSourceCommit"`
+	LastMergeTargetCommit struct {
+		CommitID string `json:"commitId"`
+	} `json:"lastMergeTargetCommit"`
 	Reviewers []struct {
 		ID          string `json:"id"`
 		DisplayName string `json:"displayName"`
@@ -167,18 +181,20 @@ type pullRequestJSON struct {
 
 func (v pullRequestJSON) pullRequest() PullRequest {
 	pr := PullRequest{
-		ID:          v.ID,
-		Title:       v.Title,
-		Repo:        v.Repository.Name,
-		RepoID:      v.Repository.ID,
-		Author:      v.CreatedBy.DisplayName,
-		AuthorKey:   strings.ToLower(v.CreatedBy.UniqueName),
-		IsDraft:     v.IsDraft,
-		Status:      v.Status,
-		Source:      v.Source,
-		Target:      v.Target,
-		Created:     v.Created,
-		Description: Markdown(v.Desc),
+		ID:           v.ID,
+		Title:        v.Title,
+		Repo:         v.Repository.Name,
+		RepoID:       v.Repository.ID,
+		Author:       v.CreatedBy.DisplayName,
+		AuthorKey:    strings.ToLower(v.CreatedBy.UniqueName),
+		IsDraft:      v.IsDraft,
+		Status:       v.Status,
+		Source:       v.Source,
+		Target:       v.Target,
+		Created:      v.Created,
+		Description:  Markdown(v.Desc),
+		SourceCommit: v.LastMergeSourceCommit.CommitID,
+		TargetCommit: v.LastMergeTargetCommit.CommitID,
 	}
 	for _, r := range v.Reviewers {
 		pr.Reviewers = append(pr.Reviewers, Reviewer{
