@@ -8,6 +8,7 @@ import (
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
 	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -474,8 +475,16 @@ func (m *WorkItems) Title() string {
 }
 
 // Hints is the key line at the bottom.
+//
+// The footer carries only opening an item, the fast path to Active, and
+// assigning to yourself — the three reached for constantly while triaging a
+// list. Scope, set state and starting a branch are one press of "?" away
+// instead: all six together, plus filter and refresh, is what pushed esc and
+// ? off the footer at 80 columns. See listKeys's own doc.
 func (m *WorkItems) Keys() help.KeyMap {
-	return listKeys(keyItem, keyScope, keyActive, keyAssign, keyState, keyBranch)
+	short := []key.Binding{keyItem, keyActive, keyAssign}
+	full := []key.Binding{keyItem, keyScope, keyActive, keyAssign, keyState, keyBranch}
+	return listKeys(short, full...)
 }
 
 // Status is the transient status line, or a prompt while one is open: the

@@ -216,8 +216,10 @@ func TestPullRequestsRefetchesOnR(t *testing.T) {
 	if status, isErr := m.Status(); isErr || !strings.Contains(status, "refresh") {
 		t.Errorf("status = %q, isErr = %v; want the refresh reported", status, isErr)
 	}
-	if !strings.Contains(helpLine(m.Keys()), "r refresh") {
-		t.Errorf("help = %q, want the refresh key offered", helpLine(m.Keys()))
+	// Refresh is never on the short line for any list view now — see
+	// listKeys's own doc — so it is the panel that has to still offer it.
+	if !strings.Contains(helpPanel(m.Keys()), "r refresh") {
+		t.Errorf("help panel = %q, want the refresh key offered", helpPanel(m.Keys()))
 	}
 }
 

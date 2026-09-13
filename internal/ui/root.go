@@ -161,9 +161,18 @@ func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // and to no other. Keys must not be acted on by a hidden view, and the status
 // line is chrome Root renders once — a hidden view setting it would describe
 // something that is not on screen.
+//
+// ErrMsg is deliberately not here. It used to be, which meant a fetch failing
+// for a view further down the stack delivered its ErrMsg to whatever view
+// happened to be on top instead — the top view showed an error about someone
+// else's fetch and decremented its own work counter for a fetch that was
+// never its, while the view that actually asked never heard back and spun
+// forever. ErrMsg carries no owner id to route on, so it goes out with the
+// rest of the data messages below and each view either recognises it or
+// ignores it, the same as every other broadcast message already works.
 func topOnly(msg tea.Msg) bool {
 	switch msg.(type) {
-	case tea.KeyMsg, StatusMsg, ErrMsg:
+	case tea.KeyMsg, StatusMsg:
 		return true
 	}
 	return false

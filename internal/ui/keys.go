@@ -77,17 +77,28 @@ type keyMap struct {
 func (k keyMap) ShortHelp() []key.Binding  { return k.short }
 func (k keyMap) FullHelp() [][]key.Binding { return k.groups }
 
-// listKeys builds the key map for a list view from the bindings it adds on top
-// of the shared set. own is shown first, because it is what distinguishes this
-// view from its siblings.
-func listKeys(own ...key.Binding) keyMap {
-	// back stays on the short line rather than moving to the panel: it is the
-	// only way out of a view, and a user who cannot see it has to guess.
-	short := append(append([]key.Binding{}, own...), keyFilter, keyRefresh, keyBack, keyHelp)
+// listKeys builds the key map for a list view from the bindings it adds on
+// top of the shared set. short is what actually appears on the footer, and is
+// meant to stay small: filter and refresh are never in it, because they are
+// already one press of "?" away in the groups below, and full is every
+// view-specific binding — short's contents included — so a binding left off
+// the footer is still discoverable rather than gone. back and help are always
+// appended to short; they are the only way out of a view and the only way to
+// see what it did not fit on the footer, and a user who cannot see either has
+// to guess.
+//
+// The split exists because listKeys used to put every one of a view's own
+// bindings straight onto the footer alongside filter and refresh. Each list
+// view's own set was sized to fit that way in isolation, so nothing caught it
+// until a whole-branch review rendered all three through the real help
+// component at once: work items and pull requests both lost esc and ? off the
+// short line at 80 columns, and builds passed with one column to spare.
+func listKeys(short []key.Binding, full ...key.Binding) keyMap {
+	line := append(append([]key.Binding{}, short...), keyBack, keyHelp)
 	return keyMap{
-		short: short,
+		short: line,
 		groups: [][]key.Binding{
-			append(append([]key.Binding{}, own...), keyRefresh),
+			append(append([]key.Binding{}, full...), keyRefresh),
 			sharedBindings(),
 			navBindings(),
 		},

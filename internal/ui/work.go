@@ -41,9 +41,10 @@ func (w *work) begin(n int) tea.Cmd {
 }
 
 // done records one fetch answering, whether it succeeded or failed. It floors
-// at zero: a view decrements on its own messages and on the generic ErrMsg,
-// which it may not have caused, and a negative tally would leave the spinner
-// running forever once the counts drifted.
+// at zero as a defensive guard rather than a routing workaround: begin and
+// done are meant to stay balanced, but a bug that let them drift would leave
+// the spinner running forever once pending went negative, and flooring is
+// cheap insurance against that either way.
 func (w *work) done() {
 	if w.pending > 0 {
 		w.pending--

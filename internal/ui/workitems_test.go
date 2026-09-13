@@ -65,8 +65,11 @@ func TestViewRendersListAndDetailSideBySide(t *testing.T) {
 	if !strings.Contains(m.Title(), "work items (all 3)") || !strings.Contains(m.Title(), "acme/Platform") {
 		t.Errorf("title = %q, missing expected pieces", m.Title())
 	}
-	if !strings.Contains(helpLine(m.Keys()), "^t scope") {
-		t.Errorf("help = %q, missing the scope toggle", helpLine(m.Keys()))
+	// Scope moved off the short line and into the panel behind "?" — see
+	// WorkItems.Keys — once the footer was found overflowing 80 columns with
+	// every one of this view's own bindings on it at once.
+	if !strings.Contains(helpPanel(m.Keys()), "^t scope") {
+		t.Errorf("help panel = %q, missing the scope toggle", helpPanel(m.Keys()))
 	}
 
 	// The detail pane must sit beside the list, not beneath it: the first row
@@ -314,8 +317,10 @@ func TestWorkItemsRefetchesOnR(t *testing.T) {
 	if status, isErr := m.Status(); isErr || !strings.Contains(status, "refresh") {
 		t.Errorf("status = %q, isErr = %v; want the refresh reported", status, isErr)
 	}
-	if !strings.Contains(helpLine(m.Keys()), "r refresh") {
-		t.Errorf("help = %q, want the refresh key offered", helpLine(m.Keys()))
+	// Refresh is never on the short line for any list view now — see
+	// listKeys's own doc — so it is the panel that has to still offer it.
+	if !strings.Contains(helpPanel(m.Keys()), "r refresh") {
+		t.Errorf("help panel = %q, want the refresh key offered", helpPanel(m.Keys()))
 	}
 }
 
