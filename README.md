@@ -267,23 +267,75 @@ Features:
 - `--json` output, so a dump can be piped into something else
 - A watch mode that polls for pull requests newly waiting on you
 - Resolving review groups through the Graph API instead of naming them in the config
+- Anchoring a review thread to the diff line it was written against, which
+  `Thread.File` already carries enough information to do
 
 Known rough edges, none of them load-bearing:
 
 - `Comments()` reads one page, so a very long discussion is silently truncated.
   The endpoint supports a `continuationToken`.
+- `IterationChanges()` has the same gap: a pull request touching more files than
+  the server returns in one page is listed short, with nothing on screen saying
+  so.
 - A build row whose timeline fetch failed retries every few seconds for as long
   as a log pane is tailing, because the hidden build list still receives the
   tail's messages.
-- A refresh that fails while you are inside a log pane reports nothing: the
-  error is delivered to the pane on top and dropped, and the build list keeps
-  reading `refreshing…`.
 - A row refresh that lands while the branch prompt is open rebuilds the list
   underneath it. If the server's order changed, the branch could be named for
   one work item and attached to another.
-- Lazily arriving rows scroll the detail pane back to the top.
+- Lazily arriving rows scroll the detail pane back to the top. The diff view is
+  the exception — it re-renders only the pane whose file just landed.
 - A copy or open failure is reported, but the raw `exec` error is not always
   the clearest thing to read.
+- The state picker draws every state on one row, so a work item type with an
+  unusually long workflow runs off the edge of a narrow terminal.
+- Straight after assigning an item to yourself the row shows your email rather
+  than your name. `az account show` does not report a display name, so that is
+  the best available until the next fetch replaces it.
+- `stateSetMsg` and `assigneeSetMsg` report success without checking the row is
+  still listed. The row sync itself is keyed by id and safely does nothing, but
+  the status line can claim a change to something no longer on screen.
+- The pull request list hands its cached threads to the detail view, which
+  writes to them in place. Resolving a thread and reopening the pull request
+  shows it resolved while the list row's own counts still say otherwise.
+- Leaving the log pane with `esc` or `q` does not clear the builds view's
+  hidden-view guard, because `Root` consumes both keys before any view sees
+  them. An in-flight `p` lookup landing in that gap is dropped; pressing `p`
+  again re-runs it.
+
+Internal cleanups, invisible from outside but worth doing:
+
+- The three single-line prompts — branch name, pull request reply, work item
+  comment — are near-identical, and more to the point the rule that every modal
+  must be reported by `Prompting()` is currently kept by hand in six places.
+  Extracting one prompt type would make that rule structural instead of
+  remembered.
+- `SharedAction` runs before a view's own key switch in the list views and after
+  it in the item and pull request detail views. Nothing collides today, which is
+  luck rather than design.
+- Re-arming a vote to a different value repeats the reviewer-id lookup it
+  already did. It costs nothing but a little work in memory.
+- The comment above the diff view's size cap says the cost is paid before the
+  hunks exist. Both sides are in fact fully fetched and decoded before the cap is
+  checked, so it bounds the diff and the render, not the download.
+- `selectedThread`'s comment says `renderThreads` sorts unresolved threads to the
+  top. It partitions them across two render passes; the conclusion holds but the
+  wording does not describe the code.
+
+Asserted but never seen against a live tenant. Each is tested against
+`httptest`, which proves boardwalk sends what it means to send and nothing about
+what Azure DevOps does with it:
+
+- Whether `PUT .../reviewers/{id}` accepts a body carrying only `{"vote": n}`.
+  **Worth smoke-testing one approve against a real pull request before relying
+  on the vote keys** — it is the one of these that fails closest to something
+  destructive.
+- Whether a binary blob's `content` comes back raw or base64-encoded. If it is
+  base64 the NUL-byte check never fires and a binary renders as base64 text
+  rather than being declined. It carries no escape bytes either way, so the
+  reason the check exists still holds.
+- Whether an empty `System.AssignedTo` unassigns rather than failing validation.
+  Unreachable in normal use: both call sites refuse to send an empty assignee.
 
 ## License
 
