@@ -153,6 +153,33 @@ func TestCreateBranchPostsAZeroOldObjectID(t *testing.T) {
 	}
 }
 
+func TestMergeRefPullRequestID(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		ref    string
+		wantID int
+		wantOK bool
+	}{
+		{"a merge ref", "refs/pull/512/merge", 512, true},
+		{"a single digit id", "refs/pull/7/merge", 7, true},
+		{"a plain branch ref", "refs/heads/feature/4021-retry", 0, false},
+		{"a branch ref that merely contains pull", "refs/heads/pull/512/merge", 0, false},
+		{"missing the merge suffix", "refs/pull/512", 0, false},
+		{"a non-numeric id", "refs/pull/abc/merge", 0, false},
+		{"a zero id", "refs/pull/0/merge", 0, false},
+		{"a negative id", "refs/pull/-5/merge", 0, false},
+		{"a missing id segment", "refs/pull//merge", 0, false},
+		{"empty", "", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id, ok := MergeRefPullRequestID(tc.ref)
+			if id != tc.wantID || ok != tc.wantOK {
+				t.Errorf("MergeRefPullRequestID(%q) = (%d, %v), want (%d, %v)", tc.ref, id, ok, tc.wantID, tc.wantOK)
+			}
+		})
+	}
+}
+
 func TestCreateBranchSurfacesAPerRefFailure(t *testing.T) {
 	// Ref creation answers 200 even when the ref was rejected. The per-ref
 	// success flag is the only signal.

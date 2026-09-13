@@ -77,6 +77,21 @@ type timelineMsg struct {
 	Err      error
 }
 
+// buildPRMsg carries the outcome of looking up the pull request a build ran
+// for. It names the build for the same reason timelineMsg does: pressing p
+// again for a different build before the first lookup answers must not let
+// the stale answer act on a build the user is no longer asking about. Branch
+// rides along too, so the no-match status line can name it without looking
+// the build back up by id — a refresh could have dropped it from m.builds
+// entirely by the time the answer lands.
+type buildPRMsg struct {
+	Build  int
+	Branch string
+	PR     azdo.PullRequest
+	Found  bool
+	Err    error
+}
+
 // Builds is the pipeline run browser.
 type Builds struct {
 	client  *azdo.Client
@@ -92,6 +107,20 @@ type Builds struct {
 	failed bool
 	work   work
 	now    func() time.Time
+
+	// linkBuild is the id of the build a pull request lookup is in flight
+	// for, or 0 when none is. It is how a late answer knows whether it is
+	// still the one asked about — see buildPRMsg.
+	linkBuild int
+
+	// hidden is true from the moment this view pushes Logs on top of itself
+	// until it is back on top. Root broadcasts buildPRMsg to the whole
+	// stack, not just the top view, so a lookup that resolves while Logs is
+	// showing must not surface its own push over it. A KeyMsg is proof of
+	// being back on top — Root's topOnly routes every key to the top view
+	// alone — so the flag clears the moment one arrives, with no need for
+	// Root or the View interface to say so explicitly.
+	hidden bool
 }
 
 // NewBuilds builds the pipeline run browser. It fetches nothing itself — Init
@@ -169,6 +198,53 @@ func (m *Builds) fetchTimelines() tea.Cmd {
 	return tea.Batch(tea.Batch(cmds...), m.work.begin(len(cmds)))
 }
 
+// fetchPullRequestLink looks up the pull request b ran for.
+//
+// The builds view holds no pull request list of its own — unlike a build's
+// timeline, which every row eventually needs and so is worth fetching eagerly,
+// a linked pull request is asked for on the rare row someone actually presses
+// p on. Fetching the active list on demand, once per press, avoids paying for
+// a second full pull request listing (and its own thread and reviewer fetches
+// were it the pull request view instead) on every build the project has run.
+func (m *Builds) fetchPullRequestLink(b azdo.Build) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		prs, err := client.PullRequests()
+		if err != nil {
+			return buildPRMsg{Build: b.ID, Branch: b.SourceBranch, Err: fmt.Errorf("could not fetch pull requests: %w", err)}
+		}
+		pr, found := matchBuildPullRequest(b, prs)
+		return buildPRMsg{Build: b.ID, Branch: b.SourceBranch, PR: pr, Found: found}
+	}
+}
+
+// matchBuildPullRequest finds the pull request a build ran for. Azure DevOps
+// builds a pull request against the merge ref it maintains for it,
+// refs/pull/{id}/merge, rather than the source branch — that form is checked
+// first because it names the pull request directly, and is checked exactly
+// once the id is on hand rather than falling through to a branch comparison
+// that a merge ref could never satisfy anyway (its Source is a refs/heads
+// ref). Everything else is a build triggered off a push, matched by comparing
+// full refs — the build list carries no repository, so nothing here
+// disambiguates same-named branches across repositories, but neither does the
+// build itself.
+func matchBuildPullRequest(b azdo.Build, prs []azdo.PullRequest) (azdo.PullRequest, bool) {
+	if id, ok := azdo.MergeRefPullRequestID(b.SourceBranch); ok {
+		for _, pr := range prs {
+			if pr.ID == id {
+				return pr, true
+			}
+		}
+		return azdo.PullRequest{}, false
+	}
+	for _, pr := range prs {
+		if pr.Source == b.SourceBranch {
+			return pr, true
+		}
+	}
+	return azdo.PullRequest{}, false
+}
+
 // Update handles input and fetch results. It satisfies View.
 func (m *Builds) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -194,6 +270,32 @@ func (m *Builds) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.applyRows()
 		return m, nil
 
+	case buildPRMsg:
+		m.work.done()
+		if m.linkBuild != msg.Build {
+			// Superseded: p was pressed again for a different build before this
+			// one answered. Acting on it now would jump to a pull request for a
+			// build the user is no longer asking about.
+			return m, nil
+		}
+		m.linkBuild = 0
+		if msg.Err != nil {
+			m.status, m.failed = msg.Err.Error(), true
+			return m, nil
+		}
+		if !msg.Found {
+			m.status, m.failed = fmt.Sprintf("no open pull request builds %s", shortRef(msg.Branch)), false
+			return m, nil
+		}
+		if m.hidden {
+			// The lookup was still in flight when the user opened this build's
+			// logs. Pushing now would yank them off that screen onto a pull
+			// request they did not just ask to see — see the hidden field's doc.
+			return m, nil
+		}
+		detail := NewPullRequestDetail(m.client, msg.PR, nil)
+		return m, func() tea.Msg { return PushMsg{View: detail} }
+
 	case ErrMsg:
 		m.work.done()
 		m.status, m.failed = msg.Err.Error(), true
@@ -204,6 +306,11 @@ func (m *Builds) Update(msg tea.Msg) (View, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Receiving a key at all proves this view is back on top: Root's
+		// topOnly sends a KeyMsg to the top of the stack alone, never to a
+		// view sitting underneath a pushed Logs.
+		m.hidden = false
+
 		if m.browser.Filtering() {
 			break
 		}
@@ -222,13 +329,27 @@ func (m *Builds) Update(msg tea.Msg) (View, tea.Cmd) {
 			if !hasRow || !ok {
 				return m, nil
 			}
+			m.hidden = true
 			logs := NewLogs(m.client, r.Build, m.records[r.ID])
 			return m, func() tea.Msg { return PushMsg{View: logs} }
+
+		case "p":
+			r, ok := row.(buildRow)
+			if !hasRow || !ok {
+				return m, nil
+			}
+			if m.linkBuild == r.ID {
+				return m, nil // already looking this one up
+			}
+			m.linkBuild = r.ID
+			m.status, m.failed = "looking for the pull request…", false
+			return m, tea.Batch(m.fetchPullRequestLink(r.Build), m.work.begin(1))
 
 		case "r":
 			m.progress = map[int]azdo.Progress{}
 			m.records = map[int][]azdo.Record{}
 			m.loading = map[int]bool{}
+			m.linkBuild = 0
 			m.status, m.failed = "refreshing…", false
 			return m, m.Init()
 		}
@@ -303,7 +424,7 @@ func (m *Builds) Title() string {
 
 // Hints is the key line at the bottom.
 func (m *Builds) Keys() help.KeyMap {
-	return listKeys(keyLogs)
+	return listKeys(keyLogs, keyLinkedPR)
 }
 
 // Status is the transient status line, or the fuzzy filter prompt while one is

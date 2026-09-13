@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -77,6 +78,23 @@ func (c *Client) RefHead(repoID, ref string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no ref matching %s", ref)
+}
+
+// MergeRefPullRequestID parses the pull request id out of a merge ref, the
+// refs/pull/{id}/merge form Azure DevOps builds against instead of a branch
+// when a pipeline runs for a pull request rather than a push. ok is false for
+// anything else, a plain branch ref included, so a caller can fall back to
+// matching branch names without checking the ref's shape itself.
+func MergeRefPullRequestID(ref string) (id int, ok bool) {
+	const prefix, suffix = "refs/pull/", "/merge"
+	if !strings.HasPrefix(ref, prefix) || !strings.HasSuffix(ref, suffix) {
+		return 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(ref, prefix), suffix))
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 // CreateBranch creates refs/heads/<branch> pointing at fromSHA. branch is the
