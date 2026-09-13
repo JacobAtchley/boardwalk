@@ -596,8 +596,10 @@ func (m *PullRequestDiff) Title() string {
 }
 
 // Keys are the shared list bindings. The view adds none of its own: everything
-// here is reading.
-func (m *PullRequestDiff) Keys() help.KeyMap { return listKeys() }
+// here is reading. Filter and refresh sit in the panel behind "?" rather than
+// on the footer, the same as every other list view now — see listKeys's own
+// doc for why.
+func (m *PullRequestDiff) Keys() help.KeyMap { return listKeys(nil) }
 
 // Status is the transient status line, or the fuzzy filter prompt while one is
 // open.

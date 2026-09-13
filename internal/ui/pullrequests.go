@@ -7,6 +7,7 @@ import (
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
 	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -409,8 +410,15 @@ func (m *PullRequests) Title() string {
 }
 
 // Hints is the key line at the bottom.
+//
+// The footer carries opening a pull request and the two scope toggles;
+// needs-my-review is one press of "?" away instead. All four together, plus
+// filter and refresh, is what pushed esc and ? off the footer at 80 columns.
+// See listKeys's own doc.
 func (m *PullRequests) Keys() help.KeyMap {
-	return listKeys(keyPullRequest, keyReview, keyDrafts, keyScope)
+	short := []key.Binding{keyPullRequest, keyDrafts, keyScope}
+	full := []key.Binding{keyPullRequest, keyReview, keyDrafts, keyScope}
+	return listKeys(short, full...)
 }
 
 // Status is the transient status line, or the fuzzy filter prompt while one is

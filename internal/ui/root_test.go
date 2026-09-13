@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -87,7 +88,11 @@ func TestRootEscapeReturnsToTheMenu(t *testing.T) {
 	updated, _ := r.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	r = updated.(*Root)
 
-	if !strings.Contains(r.View(), "pull requests") || strings.Contains(r.View(), "^t scope") {
+	// "open item" is on the work item view's own footer, not the menu's blurb
+	// for the same entry — unlike "^t scope", which moved into the panel
+	// behind "?" once the footer was trimmed to fit 80 columns (see
+	// WorkItems.Keys), this stays a marker only the open view renders.
+	if !strings.Contains(r.View(), "pull requests") || strings.Contains(r.View(), "open item") {
 		t.Errorf("escape did not return to the menu:\n%s", r.View())
 	}
 }
@@ -196,7 +201,11 @@ func TestRootLeavesEscAndQToAnOpenPrompt(t *testing.T) {
 					t.Errorf("%v quit the program with %s open", key, name)
 				}
 			}
-			if !strings.Contains(r.View(), "^t scope") {
+			// "open item" over "^t scope": the latter moved into the panel
+			// behind "?" once the work item view's footer was trimmed to fit
+			// 80 columns (see WorkItems.Keys), so it is no longer on r.View()
+			// even while this view is legitimately on top.
+			if !strings.Contains(r.View(), "open item") {
 				t.Errorf("%v popped the view instead of going to %s:\n%s", key, name, r.View())
 			}
 		}
@@ -327,6 +336,55 @@ func TestRootBroadcastsErrMsgToTheViewItBelongsToEvenWhenNotOnTop(t *testing.T) 
 	}
 	if prList.work.busy() {
 		t.Error("the pull request list is still spinning after its failure landed")
+	}
+}
+
+// TestListViewsAreConstructedOnlyByRootBuild guards the structural invariant
+// the ErrMsg broadcast fix depends on: WorkItems, PullRequests and Builds each
+// emit ErrMsg with no id naming which instance it belongs to, which is only
+// safe to broadcast because exactly one instance of each is ever alive in a
+// stack — every one is built once, by Root.build, from an empty stack (see
+// NewRoot and the menu's enter handler in Root.key). A ninth feature that
+// pushed a second instance of one of these three views — a work item view
+// reachable from inside another view's drill-down, say — would make a
+// broadcast ErrMsg ambiguous between two live views and resurrect the very
+// bug the broadcast was written to fix, silently.
+//
+// There is no runtime state that exercises this today — the risk is a future
+// call site, not a reachable program state — so this checks the source itself
+// rather than behaviour: every reference to the three constructors outside
+// their own definitions must live in root.go.
+func TestListViewsAreConstructedOnlyByRootBuild(t *testing.T) {
+	constructors := []string{"NewWorkItems(", "NewPullRequests(", "NewBuilds("}
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("could not read the package directory: %v", err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue // test fixtures build these views directly; that's expected.
+		}
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("could not read %s: %v", name, err)
+		}
+		for i, line := range strings.Split(string(src), "\n") {
+			for _, ctor := range constructors {
+				if !strings.Contains(line, ctor) {
+					continue
+				}
+				if strings.Contains(line, "func "+ctor) {
+					continue // the constructor's own definition, not a call site.
+				}
+				if name != "root.go" {
+					t.Errorf("%s:%d calls %s outside root.go — a second live instance of this view "+
+						"would make the ErrMsg broadcast ambiguous between it and the original",
+						name, i+1, strings.TrimSuffix(ctor, "("))
+				}
+			}
+		}
 	}
 }
 

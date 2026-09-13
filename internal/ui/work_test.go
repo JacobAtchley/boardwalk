@@ -64,9 +64,9 @@ func TestWorkIgnoresBeginWithNothingToDo(t *testing.T) {
 }
 
 func TestWorkSurvivesMoreCompletionsThanCalls(t *testing.T) {
-	// Every view decrements on its own messages and on the generic ErrMsg,
-	// which it may not have caused. Going negative would leave the spinner
-	// stuck on forever once the counts drifted.
+	// begin and done are meant to stay balanced; this is the defensive floor
+	// for when they do not. Going negative would leave the spinner stuck on
+	// forever once the counts drifted.
 	w := newWork()
 	w.begin(1)
 	w.done()

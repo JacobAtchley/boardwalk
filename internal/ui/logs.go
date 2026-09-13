@@ -248,13 +248,19 @@ func (m *Logs) Title() string {
 // Keys omits the filter and the Slack link: the log pane is a pager over one
 // build, not a list of things to act on. Refresh only appears once the build
 // has finished, since a running one is already tailing itself.
+//
+// The footer used to also carry copy-id and open-in-browser and never carried
+// back at all — the one view in the branch that left esc off the footer
+// entirely, the same rule violation the other list views had, just never
+// caught here because this one never overflowed. Copy-id and open are still
+// one press of "?" away in the panel's second column.
 func (m *Logs) Keys() help.KeyMap {
 	own := []key.Binding{keyTop, keyBottom}
 	if m.build.Status.Done() {
 		own = append(own, keyRefresh)
 	}
 	return keyMap{
-		short:  append(append([]key.Binding{}, own...), keyCopyID, keyOpen, keyHelp),
+		short:  append(append([]key.Binding{}, own...), keyBack, keyHelp),
 		groups: [][]key.Binding{own, {keyCopyID, keyOpen}, navBindings()},
 	}
 }

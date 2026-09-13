@@ -658,10 +658,11 @@ func (m *PullRequestDetail) Title() string {
 // all of them together found the short line had grown to thirteen bindings
 // with descriptions long enough ("linked work item", not just "linked") that
 // even trimming it to Diff, the link, reply, resolve and just refresh still
-// pushed esc and ? off the end of it at 80 columns. See
-// TestPullRequestDetailAndItemShortHelpSurviveOrdinaryWidths in keys_test.go,
-// which renders through the real help component rather than trusting a
-// character count.
+// pushed esc and ? off the end of it at 80 columns — a defect that, once
+// looked for, turned out to also be live on two other views built on
+// listKeys. See TestEveryViewsShortHelpSurvivesOrdinaryWidths in
+// keys_test.go, which renders every view's footer through the real help
+// component rather than trusting a character count.
 func (m *PullRequestDetail) Keys() help.KeyMap {
 	short := []key.Binding{keyDiff, keyLinkedItem, keyReply, keyResolve}
 	full := []key.Binding{keyDiff, keyLinkedItem, keyReply, keyResolve, keyApprove, keyWait, keyReject, keyTop, keyBottom, keyRefresh}
