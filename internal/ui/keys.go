@@ -19,8 +19,12 @@ var (
 	keyQuit       = key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit"))
 	keyHelp       = key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "keys"))
 
-	keyScope       = key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("^t", "scope"))
-	keyActive      = key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "set active"))
+	keyScope  = key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("^t", "scope"))
+	keyActive = key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "set active"))
+	// keyState is capital because s is already "copy slack link"; a is kept
+	// alongside it rather than folded in, since Active is the common case the
+	// picker would otherwise make one keystroke slower.
+	keyState       = key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "set state"))
 	keyBranch      = key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "branch"))
 	keyDrafts      = key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "drafts"))
 	keyReview      = key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "needs my review"))

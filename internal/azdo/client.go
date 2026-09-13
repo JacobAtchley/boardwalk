@@ -36,6 +36,10 @@ type Client struct {
 
 	// baseURL overrides https://dev.azure.com in tests. Empty in production.
 	baseURL string
+
+	// states caches each work item type's states for the session. See
+	// States and stateCache's own doc for why that is safe to hold onto.
+	states stateCache
 }
 
 func NewClient(org, project string) (*Client, error) {
