@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -89,6 +90,91 @@ func TestPullRequestDiffDoesNotRefetchAFileItAlreadyHas(t *testing.T) {
 
 	if r.view.loading["/a.go"] {
 		t.Error("returning to a file that had already been read fetched it a second time")
+	}
+}
+
+// longHunk is a diff tall enough to overflow the detail pane, so the tests
+// about scrolling have something to scroll.
+func longHunk(tag string) []*udiff.Hunk {
+	lines := make([]udiff.Line, 0, 200)
+	for i := 1; i <= 200; i++ {
+		lines = append(lines, line(udiff.Equal, fmt.Sprintf("%s line %d\n", tag, i)))
+	}
+	return []*udiff.Hunk{hunk(1, 1, lines...)}
+}
+
+func TestPullRequestDiffALateDiffDoesNotDisturbThePaneBeingRead(t *testing.T) {
+	// The failure this guards: the cursor moves to /b.go, whose diff lands
+	// first; the reader scrolls into it; then /a.go's slower fetch lands and
+	// rebuilds the list, which re-renders the detail pane and returns it to the
+	// top — pulling the page out from under someone mid-read.
+	r := newPRDiff(t,
+		azdo.Change{Path: "/a.go", ChangeType: "edit"},
+		azdo.Change{Path: "/b.go", ChangeType: "edit"},
+	)
+
+	r.send(tea.KeyMsg{Type: tea.KeyDown})
+	r.send(fileDiffMsg{PR: 512, Path: "/b.go", Diff: fileDiff{hunks: longHunk("b")}})
+	if !strings.Contains(r.frame(), "b line 1") {
+		t.Fatalf("the selected file's diff is not at the top of the pane:\n%s", r.frame())
+	}
+
+	r.send(tea.KeyMsg{Type: tea.KeyCtrlD})
+	if strings.Contains(r.frame(), "b line 1") {
+		t.Fatalf("ctrl+d did not scroll the pane, so this test proves nothing:\n%s", r.frame())
+	}
+
+	// The slower fetch for the row the cursor has left now lands.
+	r.send(fileDiffMsg{PR: 512, Path: "/a.go", Diff: fileDiff{hunks: longHunk("a")}})
+
+	if strings.Contains(r.frame(), "b line 1") {
+		t.Errorf("a diff landing for a file the cursor had left returned the pane to the top:\n%s", r.frame())
+	}
+	if strings.Contains(r.frame(), "a line 1") {
+		t.Errorf("a diff landing for a file the cursor had left replaced the pane's contents:\n%s", r.frame())
+	}
+	// The row still has to notice it has been read, or the pending marker lies.
+	if _, done := r.view.diffs["/a.go"]; !done {
+		t.Error("the late diff was not recorded")
+	}
+	if strings.Count(r.frame(), "·") != 0 {
+		t.Errorf("a file whose diff has landed is still marked pending:\n%s", r.frame())
+	}
+}
+
+func TestPullRequestDiffTheSelectedFilesDiffStartsAtTheTopWhenItLands(t *testing.T) {
+	// The other side of the guard above: a diff arriving for the file actually
+	// on screen must render, and render from line one rather than at whatever
+	// offset the previous file was left at.
+	r := newPRDiff(t,
+		azdo.Change{Path: "/a.go", ChangeType: "edit"},
+		azdo.Change{Path: "/b.go", ChangeType: "edit"},
+	)
+	r.send(fileDiffMsg{PR: 512, Path: "/a.go", Diff: fileDiff{hunks: longHunk("a")}})
+	r.send(tea.KeyMsg{Type: tea.KeyCtrlD})
+
+	r.send(tea.KeyMsg{Type: tea.KeyDown})
+	r.send(fileDiffMsg{PR: 512, Path: "/b.go", Diff: fileDiff{hunks: longHunk("b")}})
+
+	if !strings.Contains(r.frame(), "b line 1") {
+		t.Errorf("the newly selected file's diff did not render from the top:\n%s", r.frame())
+	}
+}
+
+func TestPullRequestDiffRefreshEmptiesTheRowsSharedView(t *testing.T) {
+	// The rows hold the diffs map by reference, so refresh has to empty it
+	// rather than hand the view a new one — otherwise every row goes on
+	// claiming to have been read until the fresh file list lands.
+	r := newPRDiff(t, azdo.Change{Path: "/a.go", ChangeType: "edit"})
+	r.send(fileDiffMsg{PR: 512, Path: "/a.go", Diff: fileDiff{hunks: longHunk("a")}})
+	if strings.Contains(r.frame(), "·") {
+		t.Fatalf("a file that has been read is still marked pending:\n%s", r.frame())
+	}
+
+	r.send(runes("r"))
+
+	if !strings.Contains(r.frame(), "·") {
+		t.Errorf("after a refresh the rows still report the discarded diffs as read:\n%s", r.frame())
 	}
 }
 

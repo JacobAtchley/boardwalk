@@ -45,16 +45,25 @@ const tabWidth = 4
 type changeRow struct {
 	azdo.Change
 	url string
-	// loaded marks a file whose diff has already landed, so the row can say
-	// which of them the lazy fetch has reached.
-	loaded bool
+	// read is the view's map of files whose diffs have landed, held by
+	// reference rather than flattened into a bool per row. A row can then say
+	// what the lazy fetch has reached without the list being rebuilt to tell
+	// it, and rebuilding the list is the thing worth avoiding: SetRows
+	// re-renders the detail pane, which returns it to the top. A slow fetch for
+	// a file the cursor has since left would otherwise yank the pane out from
+	// under whoever is scrolled into it.
+	//
+	// Shared mutable state read during a render, which is only safe because
+	// bubbletea runs Update and View on one goroutine — the map is written in
+	// Update and read here, never from a command.
+	read map[string]fileDiff
 }
 
 func (r changeRow) FilterValue() string { return r.Path }
 
 func (r changeRow) Render(width int) string {
 	pending := " "
-	if !r.loaded {
+	if _, done := r.read[r.Path]; !done {
 		pending = chromeStyle.Render("·")
 	}
 	// The glyph and the pending marker are one display column each, styled or
@@ -210,19 +219,32 @@ func (m *PullRequestDiff) Init() tea.Cmd {
 	return tea.Batch(fetch, m.work.begin(1))
 }
 
-// applyRows rebuilds the browser's rows, carrying forward which files have
-// already been diffed.
+// applyRows rebuilds the browser's rows. It is called only when the file list
+// itself changes — a diff landing does not need it, since the rows read m.diffs
+// live.
 func (m *PullRequestDiff) applyRows() {
 	rows := make([]Row, 0, len(m.changes))
 	for _, ch := range m.changes {
-		_, done := m.diffs[ch.Path]
 		rows = append(rows, changeRow{
 			Change: ch,
 			url:    m.client.PullRequestFileURL(m.pr.Repo, m.pr.ID, ch.Path),
-			loaded: done,
+			read:   m.diffs,
 		})
 	}
 	m.browser.SetRows(rows)
+}
+
+// selectedPath is the file under the cursor, or false when the list is empty.
+func (m *PullRequestDiff) selectedPath() (string, bool) {
+	row, ok := m.browser.Selected()
+	if !ok {
+		return "", false
+	}
+	r, ok := row.(changeRow)
+	if !ok {
+		return "", false
+	}
+	return r.Path, true
 }
 
 // fetchSelected loads the diff for the row under the cursor, and only that row.
@@ -357,9 +379,15 @@ func (m *PullRequestDiff) Update(msg tea.Msg) (View, tea.Cmd) {
 		if msg.Diff.err != "" {
 			m.status, m.failed = msg.Diff.err, true
 		}
-		// applyRows re-renders the detail pane on its way through SetRows, so
-		// the diff that just landed is on screen without a second call.
-		m.applyRows()
+
+		// Only the pane showing this file is re-rendered, and the rows pick the
+		// landing up on their own. Re-rendering unconditionally would return the
+		// detail pane to the top whichever file had landed, so a slow fetch for
+		// a row the cursor had already left would snap the pane the reader is
+		// scrolled into back to line one mid-read.
+		if selected, ok := m.selectedPath(); ok && selected == msg.Path {
+			m.browser.RefreshDetail()
+		}
 		return m, nil
 
 	case ErrMsg:
@@ -384,8 +412,12 @@ func (m *PullRequestDiff) Update(msg tea.Msg) (View, tea.Cmd) {
 		}
 
 		if key.Matches(msg, keyRefresh) {
-			m.diffs = map[string]fileDiff{}
-			m.loading = map[string]bool{}
+			// Emptied in place rather than replaced: the rows already on screen
+			// hold a reference to this map, and handing the view a new one
+			// would leave them reporting what the old one said until the fresh
+			// file list lands.
+			clear(m.diffs)
+			clear(m.loading)
 			m.status, m.failed = "refreshing…", false
 			return m, m.Init()
 		}
