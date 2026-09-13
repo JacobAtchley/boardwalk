@@ -164,6 +164,141 @@ func TestBuildsFailedFetchReplacesTheFetchingPlaceholder(t *testing.T) {
 	}
 }
 
+func TestMatchBuildPullRequestByMergeRef(t *testing.T) {
+	build := azdo.Build{ID: 9001, SourceBranch: "refs/pull/512/merge"}
+	prs := []azdo.PullRequest{
+		{ID: 400, Source: "refs/heads/spike"},
+		{ID: 512, Source: "refs/heads/feature/4021-retry"},
+	}
+
+	pr, ok := matchBuildPullRequest(build, prs)
+	if !ok || pr.ID != 512 {
+		t.Fatalf("matchBuildPullRequest = (%+v, %v), want pull request 512", pr, ok)
+	}
+}
+
+func TestMatchBuildPullRequestByBranch(t *testing.T) {
+	build := azdo.Build{ID: 9000, SourceBranch: "refs/heads/feature/4021-retry"}
+	prs := []azdo.PullRequest{
+		{ID: 400, Source: "refs/heads/spike"},
+		{ID: 512, Source: "refs/heads/feature/4021-retry"},
+	}
+
+	pr, ok := matchBuildPullRequest(build, prs)
+	if !ok || pr.ID != 512 {
+		t.Fatalf("matchBuildPullRequest = (%+v, %v), want pull request 512", pr, ok)
+	}
+}
+
+func TestMatchBuildPullRequestMergeRefDoesNotFallBackToBranchMatching(t *testing.T) {
+	// A merge ref names its pull request directly; it must not also be
+	// compared against Source, which is always a refs/heads ref and could
+	// never equal it anyway.
+	build := azdo.Build{ID: 9002, SourceBranch: "refs/pull/999/merge"}
+	prs := []azdo.PullRequest{{ID: 400, Source: "refs/pull/999/merge"}}
+
+	if _, ok := matchBuildPullRequest(build, prs); ok {
+		t.Error("a merge ref matched a pull request by comparing Source directly, it should only match by id")
+	}
+}
+
+func TestMatchBuildPullRequestNoMatch(t *testing.T) {
+	build := azdo.Build{ID: 9003, SourceBranch: "refs/heads/main"}
+	prs := []azdo.PullRequest{{ID: 400, Source: "refs/heads/spike"}}
+
+	if _, ok := matchBuildPullRequest(build, prs); ok {
+		t.Error("expected no match for a branch with no open pull request")
+	}
+}
+
+func TestBuildsPKeyPushesTheLinkedPullRequest(t *testing.T) {
+	m := newBuilds(t) // selected row is build 9001, refs/heads/main
+
+	// The command is not invoked: it fires a real fetch, which m's zero-value
+	// client cannot make. p pushing nothing synchronously — the lookup has to
+	// land first — is confirmed by the assertions after buildPRMsg arrives.
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")}); cmd == nil {
+		t.Fatal("p produced no command")
+	}
+
+	updated, cmd := m.Update(buildPRMsg{
+		Build: 9001,
+		PR:    azdo.PullRequest{ID: 512, Title: "Retry webhooks", Source: "refs/heads/main"},
+		Found: true,
+	})
+	m = updated.(*Builds)
+	if cmd == nil {
+		t.Fatal("the lookup landing produced no command")
+	}
+
+	push, ok := cmd().(PushMsg)
+	if !ok {
+		t.Fatalf("the lookup landing produced %T, want a PushMsg", cmd())
+	}
+	if !strings.Contains(push.View.Title(), "512") {
+		t.Errorf("pushed view = %q, want the matched pull request", push.View.Title())
+	}
+}
+
+func TestBuildsPKeyNoMatchSaysSoOnTheStatusLine(t *testing.T) {
+	m := newBuilds(t)
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	updated, cmd := m.Update(buildPRMsg{Build: 9001, Branch: "refs/heads/main", Found: false})
+	m = updated.(*Builds)
+
+	if cmd != nil {
+		if _, ok := cmd().(PushMsg); ok {
+			t.Fatal("a build with no matching pull request pushed a view")
+		}
+	}
+	status, failed := m.Status()
+	if failed {
+		t.Error("no match is not a failure")
+	}
+	if !strings.Contains(status, "no open pull request") {
+		t.Errorf("status = %q, want it to say no pull request was found", status)
+	}
+}
+
+func TestBuildsPKeyLookupFailureIsReportedAsAFailure(t *testing.T) {
+	m := newBuilds(t)
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	updated, _ := m.Update(buildPRMsg{Build: 9001, Err: errTest})
+	m = updated.(*Builds)
+
+	if _, failed := m.Status(); !failed {
+		t.Error("a failed pull request lookup was not reported as a failure")
+	}
+}
+
+func TestBuildsPKeyAnswerForABuildMovedAwayFromIsDropped(t *testing.T) {
+	m := newBuilds(t)
+
+	// Ask about 9001, then supersede it by asking about 9000 before the first
+	// answer lands.
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(*Builds)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	m = updated.(*Builds)
+
+	// The stale answer for 9001 must not push anything now that 9000 is what
+	// was actually asked about.
+	updated, cmd := m.Update(buildPRMsg{
+		Build: 9001,
+		PR:    azdo.PullRequest{ID: 512, Source: "refs/heads/main"},
+		Found: true,
+	})
+	m = updated.(*Builds)
+	if cmd != nil {
+		if _, ok := cmd().(PushMsg); ok {
+			t.Fatal("a superseded lookup pushed a view for the build that is no longer being asked about")
+		}
+	}
+}
+
 func TestBuildsEmptyStateSaysThereAreNoRuns(t *testing.T) {
 	c := &azdo.Client{Org: "acme", Project: "Platform"}
 	m := NewBuilds(c)
