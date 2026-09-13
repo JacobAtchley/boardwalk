@@ -39,7 +39,7 @@ func TestEveryBindingCarriesHelpText(t *testing.T) {
 		"filter": keyFilter, "copy id": keyCopyID, "slack": keySlack,
 		"open": keyOpen, "detail up": keyDetailUp, "detail down": keyDetailDown,
 		"refresh": keyRefresh, "back": keyBack, "quit": keyQuit, "help": keyHelp,
-		"scope": keyScope, "active": keyActive, "set state": keyState, "branch": keyBranch,
+		"scope": keyScope, "active": keyActive, "assign": keyAssign, "set state": keyState, "branch": keyBranch,
 		"drafts": keyDrafts, "logs": keyLogs, "top": keyTop, "bottom": keyBottom,
 	} {
 		h := b.Help()

@@ -25,6 +25,20 @@ func (c *Client) SetState(id int, state string) error {
 	}})
 }
 
+// SetAssignee changes who a work item is assigned to. uniqueName is the
+// account's uniqueName — the same string AssignedKey is compared against —
+// and an empty string unassigns, since that is what an empty AssignedTo
+// field means to Azure DevOps. This method does not refuse an empty
+// uniqueName: the UI layer is what has to, since it is the one that can
+// reach here with Client.Me empty by accident.
+func (c *Client) SetAssignee(id int, uniqueName string) error {
+	return c.update(id, []operation{{
+		Op:    "add",
+		Path:  "/fields/System.AssignedTo",
+		Value: uniqueName,
+	}})
+}
+
 // LinkBranch adds a branch to the work item's Development section, which is
 // what Azure DevOps shows when a branch is associated with an item.
 func (c *Client) LinkBranch(id int, projectID, repoID, branch string) error {

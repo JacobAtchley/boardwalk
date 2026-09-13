@@ -219,6 +219,73 @@ func TestItemShowsItsLinkedPullRequests(t *testing.T) {
 	}
 }
 
+func TestItemAssignToMeSyncsBothFieldsOnSuccess(t *testing.T) {
+	m := newItem(t, nil)
+	r := drive(t, m, 100, 40)
+
+	cmd := r.send(runes("m"))
+	if cmd == nil {
+		t.Fatal("m produced no command")
+	}
+	if status, isErr := m.Status(); isErr || !strings.Contains(status, "assigning #4021") {
+		t.Errorf("status = %q, isErr = %v; want the assign in flight reported", status, isErr)
+	}
+
+	r.send(assigneeSetMsg{ID: 4021, Assigned: "dev@acme.test", AssignedKey: "dev@acme.test"})
+
+	if m.item.Assigned != "dev@acme.test" || m.item.AssignedKey != "dev@acme.test" {
+		t.Errorf("item = %+v, want both Assigned and AssignedKey updated", m.item)
+	}
+	if status, isErr := m.Status(); isErr || !strings.Contains(status, "assigned to you") {
+		t.Errorf("status = %q, isErr = %v; want the assignment reported", status, isErr)
+	}
+}
+
+func TestItemAssignToMeRefusesWhenTheSignedInUserIsUnknown(t *testing.T) {
+	c, wi := itemFixture()
+	c.Me = "" // az account show failed
+	m := NewItem(c, wi, nil)
+	r := drive(t, m, 100, 40)
+
+	cmd := r.send(runes("m"))
+	if cmd != nil {
+		t.Fatal("m sent a command despite Client.Me being empty — this would silently unassign the item")
+	}
+	status, isErr := m.Status()
+	if !isErr || !strings.Contains(status, "unknown") {
+		t.Errorf("status = %q, isErr = %v; want the unknown-identity message", status, isErr)
+	}
+}
+
+func TestItemAssigneeSetErrorDoesNotBreakTheDiscussion(t *testing.T) {
+	m := newItem(t, []azdo.Comment{{Author: "Dev", Text: "already loaded"}})
+	r := drive(t, m, 100, 40)
+
+	r.send(assigneeSetMsg{ID: 4021, Err: errTest})
+
+	status, isErr := m.Status()
+	if !isErr || !strings.Contains(status, errTest.Error()) {
+		t.Errorf("status = %q, isErr = %v, want the failure reported", status, isErr)
+	}
+	if strings.Contains(r.frame(), "could not load the discussion") {
+		t.Error("an unrelated assign error made the already-loaded discussion look broken")
+	}
+	if m.item.AssignedKey != "dev@acme.test" {
+		t.Errorf("AssignedKey = %q, want it left alone by the failed assign", m.item.AssignedKey)
+	}
+}
+
+func TestItemAssigneeSetIgnoresAResultForAnotherItem(t *testing.T) {
+	m := newItem(t, nil)
+	r := drive(t, m, 100, 40)
+
+	r.send(assigneeSetMsg{ID: 9999, Assigned: "someone@acme.test", AssignedKey: "someone@acme.test"})
+
+	if m.item.AssignedKey != "dev@acme.test" {
+		t.Errorf("AssignedKey = %q, want it untouched by a result for a different item", m.item.AssignedKey)
+	}
+}
+
 func TestItemSaysWhenNothingIsLinked(t *testing.T) {
 	m := newItem(t, nil)
 	m.Init()

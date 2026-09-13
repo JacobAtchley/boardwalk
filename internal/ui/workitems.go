@@ -96,15 +96,25 @@ func NewWorkItems(c *azdo.Client, items []azdo.WorkItem, mineOnly, includeClosed
 // setItems splits the caller's own items out of the batch up front, so
 // toggling scope is instant.
 func (m *WorkItems) setItems(items []azdo.WorkItem) {
-	m.all, m.mine = nil, nil
+	m.all = nil
 	for _, wi := range items {
-		row := workItemRow{wi, m.client.WorkItemURL(wi.ID)}
-		m.all = append(m.all, row)
-		if m.client.Me != "" && wi.AssignedKey == m.client.Me {
+		m.all = append(m.all, workItemRow{wi, m.client.WorkItemURL(wi.ID)})
+	}
+	m.rebuildMine()
+	m.applyScope()
+}
+
+// rebuildMine recomputes the mine subset from all. It is its own step rather
+// than folded into setItems: an assignee change can move a row into or out
+// of the mine scope, which a state change never does, so setRowAssignee
+// needs to redo this filter while setRowState does not.
+func (m *WorkItems) rebuildMine() {
+	m.mine = nil
+	for _, row := range m.all {
+		if it, ok := row.(workItemRow); ok && m.client.Me != "" && it.AssignedKey == m.client.Me {
 			m.mine = append(m.mine, row)
 		}
 	}
-	m.applyScope()
 }
 
 // Init fetches the project's work items when the view has none, and otherwise
@@ -214,6 +224,15 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.status, m.failed = fmt.Sprintf("#%d is now %s", msg.ID, msg.State), false
 		return m, nil
 
+	case assigneeSetMsg:
+		if msg.Err != nil {
+			m.status, m.failed = msg.Err.Error(), true
+			return m, nil
+		}
+		m.setRowAssignee(msg.ID, msg.Assigned, msg.AssignedKey)
+		m.status, m.failed = fmt.Sprintf("#%d is now assigned to you", msg.ID), false
+		return m, nil
+
 	case statesFetchedMsg:
 		// Named by id, like every other broadcast message in this file: the
 		// picker this landed for may have already been cancelled, or reopened
@@ -306,6 +325,21 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 			}
 			return m, nil
 
+		case "m":
+			it, ok := m.selected()
+			if !ok {
+				return m, nil
+			}
+			// An empty Me means az account show failed at startup — sending it
+			// as the assignee would unassign the item instead of claiming it,
+			// which is the opposite of what the key means and destructive.
+			if m.client.Me == "" {
+				m.status, m.failed = "cannot assign: the signed-in user is unknown", true
+				return m, nil
+			}
+			m.status, m.failed = fmt.Sprintf("assigning #%d to you…", it.ID), false
+			return m, assignCmd(m.client, it.ID)
+
 		case "S":
 			if it, ok := m.selected(); ok {
 				m.statePicker = newStatePicker(it.ID)
@@ -384,6 +418,24 @@ func (m *WorkItems) setRowState(id int, state string) {
 	m.browser.RefreshDetail()
 }
 
+// setRowAssignee rewrites a row after a successful assign, updating Assigned
+// and AssignedKey together — a refetch-free update that only touched the
+// display name would leave the mine scope filter, which reads AssignedKey,
+// disagreeing with what the row now shows. Unlike setRowState, mine is
+// rebuilt rather than patched in place: the row is newly appearing in it,
+// not already there under a stale value.
+func (m *WorkItems) setRowAssignee(id int, assigned, assignedKey string) {
+	for i, row := range m.all {
+		if it, ok := row.(workItemRow); ok && it.ID == id {
+			it.Assigned, it.AssignedKey = assigned, assignedKey
+			m.all[i] = it
+		}
+	}
+	m.rebuildMine()
+	m.applyScope()
+	m.browser.RefreshDetail()
+}
+
 // Body renders the browser at the size Root has left for it.
 func (m *WorkItems) Body(width, height int) string {
 	m.browser.SetSize(width, height)
@@ -423,7 +475,7 @@ func (m *WorkItems) Title() string {
 
 // Hints is the key line at the bottom.
 func (m *WorkItems) Keys() help.KeyMap {
-	return listKeys(keyItem, keyScope, keyActive, keyState, keyBranch)
+	return listKeys(keyItem, keyScope, keyActive, keyAssign, keyState, keyBranch)
 }
 
 // Status is the transient status line, or a prompt while one is open: the
