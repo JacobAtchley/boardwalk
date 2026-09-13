@@ -95,9 +95,17 @@ func (c *Client) IterationChanges(repoID string, prID, iterationID int) ([]Chang
 // quietly full of {"objectId":… instead of code. Pinning the format means the
 // shape cannot depend on what a proxy did to the request, and a file whose own
 // contents are JSON still cannot be confused with the envelope around it.
+// Content is a pointer so that a field which is absent can be told from one
+// that is present and empty. They mean opposite things: an empty string is a
+// genuinely empty file, while a missing field is an envelope that did not carry
+// the content at all — includeContent ignored, or an item that is not a blob.
+// Reading both as "" would render that side of the diff as an empty file, and
+// an ordinary edit would read as a wholesale addition. That is the silent
+// failure asking for $format=json was meant to rule out, so it is an error here
+// rather than a quietly wrong diff.
 func (c *Client) FileAtCommit(repoID, path, commitSHA string) (string, error) {
 	var resp struct {
-		Content string `json:"content"`
+		Content *string `json:"content"`
 	}
 
 	endpoint := fmt.Sprintf(
@@ -109,7 +117,10 @@ func (c *Client) FileAtCommit(repoID, path, commitSHA string) (string, error) {
 	if err := c.get(endpoint, &resp); err != nil {
 		return "", err
 	}
-	return resp.Content, nil
+	if resp.Content == nil {
+		return "", fmt.Errorf("no content was returned for %s at %s", path, commitSHA)
+	}
+	return *resp.Content, nil
 }
 
 // PullRequestFileURL is the browser URL for one file inside a pull request,

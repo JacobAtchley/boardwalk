@@ -146,6 +146,41 @@ func TestFileAtCommitEscapesThePathAndTheCommit(t *testing.T) {
 	}
 }
 
+func TestFileAtCommitErrorsWhenTheEnvelopeCarriesNoContent(t *testing.T) {
+	// A valid envelope with the field absent — includeContent ignored, or an
+	// item that is not a blob. Reading it as "" would render that side as an
+	// empty file, so an ordinary edit would show as a wholesale addition:
+	// wrong, and wrong silently, which is the whole reason this endpoint is
+	// read as pinned JSON in the first place.
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"objectId":"abc","path":"/a.go","gitObjectType":"blob"}`))
+	})
+
+	text, err := c.FileAtCommit("r1", "/a.go", "deadbeef")
+	if err == nil {
+		t.Fatalf("an envelope with no content field returned (%q, nil); an edit would read as a wholesale addition", text)
+	}
+	if !strings.Contains(err.Error(), "/a.go") {
+		t.Errorf("error = %q, want the file it was asked for named in it", err)
+	}
+}
+
+func TestFileAtCommitAllowsAGenuinelyEmptyFile(t *testing.T) {
+	// The other half of the distinction above: present and empty is a real
+	// empty file, and must not be mistaken for the absent case.
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"objectId":"abc","path":"/empty.go","content":""}`))
+	})
+
+	text, err := c.FileAtCommit("r1", "/empty.go", "deadbeef")
+	if err != nil {
+		t.Fatalf("an empty file returned %v, want it read as empty", err)
+	}
+	if text != "" {
+		t.Errorf("content = %q, want the empty string", text)
+	}
+}
+
 func TestFileAtCommitReportsAFailure(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
