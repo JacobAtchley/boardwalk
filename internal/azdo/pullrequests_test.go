@@ -163,7 +163,7 @@ func TestPullRequestsMarksGroupReviewers(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"value":[{"pullRequestId":700,"repository":{"id":"r1","name":"a"},
 		 "reviewers":[
-		   {"displayName":"Dev Example","uniqueName":"Dev@Acme.test","vote":0},
+		   {"id":"guid-1","displayName":"Dev Example","uniqueName":"Dev@Acme.test","vote":0},
 		   {"displayName":"platform-devs","isContainer":true,"vote":0}]}]}`))
 	})
 
@@ -179,8 +179,53 @@ func TestPullRequestsMarksGroupReviewers(t *testing.T) {
 	if person.Key != "dev@acme.test" {
 		t.Errorf("reviewer key = %q, want it lowercased for comparison against Me", person.Key)
 	}
+	if person.ID != "guid-1" {
+		t.Errorf("reviewer id = %q, want the payload's guid, so a vote can address them", person.ID)
+	}
 	if !group.IsGroup {
 		t.Error("a group reviewer was not marked as one")
+	}
+	if group.ID != "" {
+		t.Errorf("group id = %q, want none: a group is never who a vote is cast for", group.ID)
+	}
+}
+
+func TestSetVotePutsTheVoteToTheReviewerID(t *testing.T) {
+	var method, path, contentType, body string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		contentType = r.Header.Get("Content-Type")
+		buf, _ := io.ReadAll(r.Body)
+		body = string(buf)
+		w.Write([]byte(`{"vote":10}`))
+	})
+
+	if err := c.SetVote("r1", 512, "guid-1", VoteApproved); err != nil {
+		t.Fatalf("SetVote returned %v", err)
+	}
+	if method != http.MethodPut {
+		t.Errorf("method = %s, want PUT", method)
+	}
+	if path != "/acme/Platform/_apis/git/repositories/r1/pullRequests/512/reviewers/guid-1" {
+		t.Errorf("path = %q", path)
+	}
+	if contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", contentType)
+	}
+	if body != `{"vote":10}` {
+		t.Errorf("body = %q", body)
+	}
+}
+
+func TestSetVoteReportsAServerRefusal(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"message":"TF401027: not authorized"}`))
+	})
+
+	err := c.SetVote("r1", 512, "guid-1", VoteRejected)
+	if err == nil || !strings.Contains(err.Error(), "TF401027") {
+		t.Errorf("error = %v, want the server message", err)
 	}
 }
 

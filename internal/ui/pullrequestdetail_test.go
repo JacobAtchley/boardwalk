@@ -19,7 +19,7 @@ func prDetailFixture() (*azdo.Client, azdo.PullRequest) {
 		Created:     now.Add(-3 * time.Hour),
 		Description: "Adds **backoff** to delivery.",
 		Reviewers: []azdo.Reviewer{
-			{Name: "Dev Example", Key: "dev@acme.test", Vote: 10},
+			{Name: "Dev Example", Key: "dev@acme.test", ID: "guid-1", Vote: 10},
 			{Name: "platform-devs", IsGroup: true},
 		},
 	}
@@ -476,5 +476,145 @@ func TestThreadResolvedReportsAFailure(t *testing.T) {
 	status, isErr := m.Status()
 	if !isErr || !strings.Contains(status, errTest.Error()) {
 		t.Errorf("status = %q, isErr = %v", status, isErr)
+	}
+}
+
+func TestVoteKeyArmsAndRequiresConfirmation(t *testing.T) {
+	m := newPRDetail(t, nil)
+	r := drive(t, m, 100, 60)
+
+	if cmd := r.send(runes("X")); cmd != nil {
+		t.Error("arming a vote must not start work by itself")
+	}
+	if m.armedVote == nil {
+		t.Fatal("X did not arm the reject vote")
+	}
+	if !m.Prompting() {
+		t.Error("Prompting did not report the armed vote")
+	}
+	if status, isErr := m.Status(); isErr || !strings.Contains(status, "press again to reject") {
+		t.Errorf("status = %q, isErr = %v, want it to say the vote is armed", status, isErr)
+	}
+}
+
+func TestVoteKeyEscCancelsTheArm(t *testing.T) {
+	m := newPRDetail(t, nil)
+	r := drive(t, m, 100, 60)
+	r.send(runes("X"))
+
+	cmd := r.send(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		t.Error("cancelling an armed vote started work anyway")
+	}
+	if m.armedVote != nil {
+		t.Error("esc did not disarm the vote")
+	}
+	if m.Prompting() {
+		t.Error("Prompting still reports a prompt after the arm was cancelled")
+	}
+}
+
+func TestVoteKeySecondPressConfirmsAndAppliesInPlaceWithoutARefetch(t *testing.T) {
+	m := newPRDetail(t, nil)
+	r := drive(t, m, 100, 60)
+	r.send(runes("X"))
+
+	cmd := r.send(runes("X"))
+	if cmd == nil {
+		t.Fatal("the second press did not fire the vote")
+	}
+	if m.armedVote != nil {
+		t.Error("the arm is still set after confirming")
+	}
+
+	// The command that actually talks to Azure DevOps is never run in a test —
+	// its result is delivered directly, the same way replySentMsg is driven
+	// in TestReplyPromptEnterSendsAndAppendsTheCommentWithoutARefetch above.
+	r.send(voteCastMsg{PR: 512, ReviewerID: "guid-1", Vote: azdo.VoteRejected})
+
+	status, isErr := m.Status()
+	if isErr {
+		t.Errorf("status = %q, reported as an error", status)
+	}
+	if !strings.Contains(r.frame(), "rejected") {
+		t.Errorf("the reviewer's vote did not update in the cache:\n%s", r.frame())
+	}
+}
+
+func TestVoteKeyPressingADifferentVoteReArmsInsteadOfConfirming(t *testing.T) {
+	m := newPRDetail(t, nil)
+	r := drive(t, m, 100, 60)
+	r.send(runes("X")) // arm reject
+
+	cmd := r.send(runes("A")) // change of mind, before confirming
+	if cmd != nil {
+		t.Error("switching the armed vote must not fire the old one")
+	}
+	if m.armedVote == nil || m.armedVote.vote != azdo.VoteApproved {
+		t.Fatalf("armedVote = %+v, want it switched to approve", m.armedVote)
+	}
+	if status, _ := m.Status(); !strings.Contains(status, "press again to approve") {
+		t.Errorf("status = %q, want it to name the newly armed vote", status)
+	}
+}
+
+func TestVoteKeySwallowsOtherKeysWhileArmed(t *testing.T) {
+	// The arm is a modal state: an unrelated binding must not fire, and must
+	// not clear the arm either — only esc or the confirming key should.
+	m := newPRDetail(t, nil)
+	r := drive(t, m, 100, 60)
+	r.send(runes("X"))
+
+	cmd := r.send(runes("r"))
+	if cmd != nil {
+		t.Error("an unrelated key produced a command while a vote was armed")
+	}
+	if m.armedVote == nil {
+		t.Error("an unrelated key disarmed the vote")
+	}
+}
+
+func TestVoteWithoutADirectReviewerIDReportsClearly(t *testing.T) {
+	// Covered only by the group, not named individually: nothing in the
+	// payload gives a vote something to address.
+	c, pr := prDetailFixture()
+	pr.Reviewers = []azdo.Reviewer{{Name: "platform-devs", IsGroup: true}}
+	m := NewPullRequestDetail(c, pr, nil)
+	r := drive(t, m, 100, 60)
+
+	cmd := r.send(runes("A"))
+
+	if cmd != nil {
+		t.Error("arming a vote with no reviewer id to address it started work")
+	}
+	if m.armedVote != nil {
+		t.Error("a vote armed with nothing to address it")
+	}
+	status, isErr := m.Status()
+	if !isErr || !strings.Contains(status, "not a direct reviewer") {
+		t.Errorf("status = %q, isErr = %v, want it to explain there is no id to vote with", status, isErr)
+	}
+}
+
+func TestVoteCastReportsAFailure(t *testing.T) {
+	m := newPRDetail(t, nil)
+	r := drive(t, m, 100, 60)
+
+	r.send(voteCastMsg{PR: 512, ReviewerID: "guid-1", Err: errTest})
+
+	status, isErr := m.Status()
+	if !isErr || !strings.Contains(status, errTest.Error()) {
+		t.Errorf("status = %q, isErr = %v", status, isErr)
+	}
+}
+
+func TestVoteCastIgnoresAnotherPullRequests(t *testing.T) {
+	m := newPRDetail(t, nil)
+	r := drive(t, m, 100, 60)
+
+	r.send(voteCastMsg{PR: 511, ReviewerID: "guid-1", Vote: azdo.VoteRejected})
+
+	if strings.Contains(r.frame(), "rejected") {
+		t.Error("a vote belonging to another pull request was applied")
 	}
 }

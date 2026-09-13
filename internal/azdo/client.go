@@ -119,6 +119,16 @@ func (c *Client) post(url string, body, out any) error {
 	return c.do(req, out)
 }
 
+// put replaces a resource wholesale. The vote endpoint is the only caller so
+// far: it treats a reviewer entry as something to overwrite, not append to.
+func (c *Client) put(url string, body, out any) error {
+	req, err := jsonRequest(http.MethodPut, url, "application/json", body)
+	if err != nil {
+		return err
+	}
+	return c.do(req, out)
+}
+
 // patch takes its content type explicitly because work item updates use
 // application/json-patch+json, which the rest of the API does not.
 func (c *Client) patch(url, contentType string, body, out any) error {

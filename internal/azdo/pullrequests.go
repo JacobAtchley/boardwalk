@@ -21,10 +21,25 @@ const prPageSize = 200
 type Reviewer struct {
 	Name string
 	Key  string // uniqueName, lowercased, compared against Client.Me
+	// ID is the reviewer's GUID, which is how the vote endpoint addresses
+	// them — uniqueName does not work there. It is only ever populated for
+	// entries actually returned in a pull request's own reviewers list; see
+	// MyReviewerID in review.go for why that matters.
+	ID   string
 	Vote int
 	// IsGroup marks a team or security group standing in for its members.
 	IsGroup bool
 }
+
+// Azure DevOps's reviewer vote scale. VoteLabel below decodes them; nothing in
+// between -10 and 10 other than 5 and -5 means anything to the API.
+const (
+	VoteApproved                = 10
+	VoteApprovedWithSuggestions = 5
+	VoteNoVote                  = 0
+	VoteWaitingForAuthor        = -5
+	VoteRejected                = -10
+)
 
 // VoteLabel renders Azure DevOps's numeric vote as the words its own UI uses.
 func (r Reviewer) VoteLabel() string {
@@ -142,6 +157,7 @@ type pullRequestJSON struct {
 		Name string `json:"name"`
 	} `json:"repository"`
 	Reviewers []struct {
+		ID          string `json:"id"`
 		DisplayName string `json:"displayName"`
 		UniqueName  string `json:"uniqueName"`
 		Vote        int    `json:"vote"`
@@ -168,6 +184,7 @@ func (v pullRequestJSON) pullRequest() PullRequest {
 		pr.Reviewers = append(pr.Reviewers, Reviewer{
 			Name:    r.DisplayName,
 			Key:     strings.ToLower(r.UniqueName),
+			ID:      r.ID,
 			Vote:    r.Vote,
 			IsGroup: r.IsContainer,
 		})
@@ -320,6 +337,23 @@ func (c *Client) SetThreadStatus(repoID string, prID, threadID int, status strin
 	// Thread status is an ordinary JSON body, unlike the json-patch+json that
 	// work item updates require.
 	return c.patch(endpoint, "application/json", body, nil)
+}
+
+// SetVote casts reviewerID's vote on a pull request. The endpoint is a PUT
+// rather than a PATCH — it replaces the whole reviewer entry — which is also
+// how Azure DevOps adds someone as a reviewer who was not one before, though
+// boardwalk only ever calls it with an id already in the pull request's own
+// reviewers list.
+func (c *Client) SetVote(repoID string, prID int, reviewerID string, vote int) error {
+	body := struct {
+		Vote int `json:"vote"`
+	}{Vote: vote}
+
+	endpoint := fmt.Sprintf(
+		"%s/%s/%s/_apis/git/repositories/%s/pullRequests/%d/reviewers/%s?api-version=%s",
+		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project),
+		url.PathEscape(repoID), prID, url.PathEscape(reviewerID), APIVersion)
+	return c.put(endpoint, body, nil)
 }
 
 // PullRequestURL is the browser URL for a pull request.
