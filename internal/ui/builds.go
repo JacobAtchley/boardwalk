@@ -112,6 +112,15 @@ type Builds struct {
 	// for, or 0 when none is. It is how a late answer knows whether it is
 	// still the one asked about — see buildPRMsg.
 	linkBuild int
+
+	// hidden is true from the moment this view pushes Logs on top of itself
+	// until it is back on top. Root broadcasts buildPRMsg to the whole
+	// stack, not just the top view, so a lookup that resolves while Logs is
+	// showing must not surface its own push over it. A KeyMsg is proof of
+	// being back on top — Root's topOnly routes every key to the top view
+	// alone — so the flag clears the moment one arrives, with no need for
+	// Root or the View interface to say so explicitly.
+	hidden bool
 }
 
 // NewBuilds builds the pipeline run browser. It fetches nothing itself — Init
@@ -278,6 +287,12 @@ func (m *Builds) Update(msg tea.Msg) (View, tea.Cmd) {
 			m.status, m.failed = fmt.Sprintf("no open pull request builds %s", shortRef(msg.Branch)), false
 			return m, nil
 		}
+		if m.hidden {
+			// The lookup was still in flight when the user opened this build's
+			// logs. Pushing now would yank them off that screen onto a pull
+			// request they did not just ask to see — see the hidden field's doc.
+			return m, nil
+		}
 		detail := NewPullRequestDetail(m.client, msg.PR, nil)
 		return m, func() tea.Msg { return PushMsg{View: detail} }
 
@@ -291,6 +306,11 @@ func (m *Builds) Update(msg tea.Msg) (View, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Receiving a key at all proves this view is back on top: Root's
+		// topOnly sends a KeyMsg to the top of the stack alone, never to a
+		// view sitting underneath a pushed Logs.
+		m.hidden = false
+
 		if m.browser.Filtering() {
 			break
 		}
@@ -309,6 +329,7 @@ func (m *Builds) Update(msg tea.Msg) (View, tea.Cmd) {
 			if !hasRow || !ok {
 				return m, nil
 			}
+			m.hidden = true
 			logs := NewLogs(m.client, r.Build, m.records[r.ID])
 			return m, func() tea.Msg { return PushMsg{View: logs} }
 

@@ -297,6 +297,74 @@ func TestBuildsPKeyAnswerForABuildMovedAwayFromIsDropped(t *testing.T) {
 			t.Fatal("a superseded lookup pushed a view for the build that is no longer being asked about")
 		}
 	}
+
+	// 9000's own answer, arriving after, is the live request and must still
+	// push — being superseded once must not leave the tracking wedged so
+	// nothing ever pushes again.
+	updated, cmd = m.Update(buildPRMsg{
+		Build: 9000,
+		PR:    azdo.PullRequest{ID: 700, Title: "Fix flaky retries", Source: "refs/heads/feature/x"},
+		Found: true,
+	})
+	m = updated.(*Builds)
+	if cmd == nil {
+		t.Fatal("9000's own answer produced no command")
+	}
+	push, ok := cmd().(PushMsg)
+	if !ok {
+		t.Fatalf("9000's own answer produced %T, want a PushMsg", cmd())
+	}
+	if !strings.Contains(push.View.Title(), "700") {
+		t.Errorf("pushed view = %q, want the pull request 9000 was actually matched to", push.View.Title())
+	}
+}
+
+func TestBuildsPKeyAnswerDoesNotPushOverLogsTheUserHasSinceOpened(t *testing.T) {
+	m := newBuilds(t) // selected row is build 9001
+
+	// Ask about 9001's pull request, then — before it answers — open 9001's
+	// logs. Root would deliver the pending buildPRMsg to this view too, even
+	// though Logs is what is actually on screen now.
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(*Builds)
+	if cmd == nil {
+		t.Fatal("enter produced no command")
+	}
+	if _, ok := cmd().(PushMsg); !ok {
+		t.Fatal("enter did not push the logs")
+	}
+
+	updated, cmd = m.Update(buildPRMsg{
+		Build: 9001,
+		PR:    azdo.PullRequest{ID: 512, Source: "refs/heads/main"},
+		Found: true,
+	})
+	m = updated.(*Builds)
+	if cmd != nil {
+		if _, ok := cmd().(PushMsg); ok {
+			t.Fatal("the pull request lookup pushed a view on top of the logs the user had since opened")
+		}
+	}
+
+	// Once a key reaches this view again — proof Logs was popped and it is
+	// back on top — it must resume acting on new lookups normally.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(*Builds)
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	m = updated.(*Builds)
+	updated, cmd = m.Update(buildPRMsg{
+		Build: 9000,
+		PR:    azdo.PullRequest{ID: 700, Title: "Fix flaky retries", Source: "refs/heads/feature/x"},
+		Found: true,
+	})
+	m = updated.(*Builds)
+	if cmd == nil {
+		t.Fatal("a lookup made after returning to this view produced no command")
+	}
+	if _, ok := cmd().(PushMsg); !ok {
+		t.Fatal("a lookup made after returning to this view should push normally")
+	}
 }
 
 func TestBuildsEmptyStateSaysThereAreNoRuns(t *testing.T) {

@@ -167,6 +167,8 @@ func TestMergeRefPullRequestID(t *testing.T) {
 		{"missing the merge suffix", "refs/pull/512", 0, false},
 		{"a non-numeric id", "refs/pull/abc/merge", 0, false},
 		{"a zero id", "refs/pull/0/merge", 0, false},
+		{"a negative id", "refs/pull/-5/merge", 0, false},
+		{"a missing id segment", "refs/pull//merge", 0, false},
 		{"empty", "", 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
