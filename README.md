@@ -166,7 +166,24 @@ The side pane is a summary. `enter` opens the pull request itself: the
 description, every reviewer's vote, the work items it is linked to, and every
 discussion — whole threads, not just the line each one opens with — unresolved
 first. `w` opens the first linked work item. `c` replies to the first
-unresolved thread and `R` resolves it, both without leaving the view.
+unresolved thread and `R` resolves it, both without leaving the view. `D` opens
+the diff.
+
+### Diff
+
+| key | |
+|---|---|
+| `D` | from a pull request, open its diff |
+| `^u` / `^d` | scroll the file's diff |
+
+The changed files are the list and the selected file's diff is the pane beside
+it, as a unified diff: additions green, deletions red, three lines of context.
+Files are read one at a time as the cursor reaches them, so a pull request
+touching two hundred files still opens at once.
+
+A binary file, or one over 256 KiB, says what it is instead of being rendered.
+A renamed file reads as a new one: the change entry names only where the file
+landed, so its previous content is at a path boardwalk cannot ask for.
 
 Between them those two close the loop `b` opens: branch from a work item, and
 the work item knows about the pull request that branch became, and the pull

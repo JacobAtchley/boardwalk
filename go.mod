@@ -4,6 +4,7 @@ go 1.27.1
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown v1.6.0
+	github.com/aymanbagabas/go-udiff v0.4.1
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/glamour v1.0.0

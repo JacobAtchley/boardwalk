@@ -284,3 +284,35 @@ func TestSlackLinkEscapesBracketsInTheTitle(t *testing.T) {
 		t.Errorf("SlackLink = %q, want the brackets turned into parentheses", got)
 	}
 }
+
+func TestBrowserListShareDecidesHowMuchRoomTheDetailPaneGets(t *testing.T) {
+	// The diff view turns the share down so its pane can hold source code. A
+	// share outside (0,1) falls back to the default rather than giving the list
+	// every column or none of them.
+	widthFor := func(share float64) int {
+		var got int
+		b := NewBrowser()
+		b.ListShare = share
+		b.Detail = func(_ Row, width int) string {
+			got = width
+			return ""
+		}
+		b.SetRows([]Row{fakeRow{1, "first thing"}})
+		b.SetSize(200, 20)
+		return got
+	}
+
+	byDefault := widthFor(listShare)
+	narrow := widthFor(diffListShare)
+	if narrow <= byDefault {
+		t.Errorf("a narrower list share gave the detail pane %d columns, no more than the default's %d",
+			narrow, byDefault)
+	}
+
+	for _, nonsense := range []float64{0, 1, -0.5, 2} {
+		if got := widthFor(nonsense); got != byDefault {
+			t.Errorf("a list share of %v gave the detail pane %d columns, want the default's %d",
+				nonsense, got, byDefault)
+		}
+	}
+}
