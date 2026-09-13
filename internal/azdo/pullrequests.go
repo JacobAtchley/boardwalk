@@ -64,6 +64,7 @@ type PullRequest struct {
 
 // ThreadComment is one comment in a pull request discussion.
 type ThreadComment struct {
+	ID      int
 	Author  string
 	Created time.Time
 	Text    string
@@ -72,6 +73,7 @@ type ThreadComment struct {
 // Thread is one discussion on a pull request: the whole exchange, not just its
 // opening comment, because the detail view reads it as a conversation.
 type Thread struct {
+	ID       int
 	Status   string
 	Resolved bool
 	// File is set when the thread is anchored to a line of the diff rather
@@ -177,12 +179,14 @@ func (v pullRequestJSON) pullRequest() PullRequest {
 func (c *Client) Threads(repoID string, prID int) ([]Thread, error) {
 	var resp struct {
 		Value []struct {
+			ID        int    `json:"id"`
 			Status    string `json:"status"`
 			IsDeleted bool   `json:"isDeleted"`
 			Context   *struct {
 				FilePath string `json:"filePath"`
 			} `json:"threadContext"`
 			Comments []struct {
+				ID          int       `json:"id"`
 				Content     string    `json:"content"`
 				CommentType string    `json:"commentType"`
 				Published   time.Time `json:"publishedDate"`
@@ -211,7 +215,7 @@ func (c *Client) Threads(repoID string, prID int) ([]Thread, error) {
 		// branch updated — as threads. They carry only system comments, and
 		// keeping them would make every pull request look busy with discussion
 		// nobody wrote.
-		thread := Thread{Status: t.Status, Resolved: resolvedStatus(t.Status)}
+		thread := Thread{ID: t.ID, Status: t.Status, Resolved: resolvedStatus(t.Status)}
 		if t.Context != nil {
 			thread.File = t.Context.FilePath
 		}
@@ -220,6 +224,7 @@ func (c *Client) Threads(repoID string, prID int) ([]Thread, error) {
 				continue
 			}
 			thread.Comments = append(thread.Comments, ThreadComment{
+				ID:      cm.ID,
 				Author:  cm.Author.DisplayName,
 				Created: cm.Published,
 				// Pull request comments are written in markdown, so this is a
@@ -264,6 +269,58 @@ func resolvedStatus(s string) bool {
 }
 
 func unresolvedStatus(s string) bool { return s == "active" || s == "pending" }
+
+// ReplyToThread posts a comment onto an existing thread, addressed to
+// parentCommentID — the API answers a specific comment rather than the thread
+// as a whole, and the detail view only ever offers to answer the opener.
+func (c *Client) ReplyToThread(repoID string, prID, threadID, parentCommentID int, text string) (ThreadComment, error) {
+	body := struct {
+		Content         string `json:"content"`
+		ParentCommentID int    `json:"parentCommentId"`
+		CommentType     string `json:"commentType"`
+	}{Content: text, ParentCommentID: parentCommentID, CommentType: "text"}
+
+	var resp struct {
+		ID        int       `json:"id"`
+		Content   string    `json:"content"`
+		Published time.Time `json:"publishedDate"`
+		Author    struct {
+			DisplayName string `json:"displayName"`
+		} `json:"author"`
+	}
+
+	endpoint := fmt.Sprintf(
+		"%s/%s/%s/_apis/git/repositories/%s/pullRequests/%d/threads/%d/comments?api-version=%s",
+		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project),
+		url.PathEscape(repoID), prID, threadID, APIVersion)
+	if err := c.post(endpoint, body, &resp); err != nil {
+		return ThreadComment{}, err
+	}
+	return ThreadComment{
+		ID:      resp.ID,
+		Author:  resp.Author.DisplayName,
+		Created: resp.Published,
+		Text:    Markdown(resp.Content),
+	}, nil
+}
+
+// SetThreadStatus moves a thread to a new status: active, fixed, wontFix,
+// closed or pending. The resolve key only ever sends fixed, but the method
+// takes the status rather than hard-coding it because there is nothing
+// reply-specific about the endpoint.
+func (c *Client) SetThreadStatus(repoID string, prID, threadID int, status string) error {
+	body := struct {
+		Status string `json:"status"`
+	}{Status: status}
+
+	endpoint := fmt.Sprintf(
+		"%s/%s/%s/_apis/git/repositories/%s/pullRequests/%d/threads/%d?api-version=%s",
+		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project),
+		url.PathEscape(repoID), prID, threadID, APIVersion)
+	// Thread status is an ordinary JSON body, unlike the json-patch+json that
+	// work item updates require.
+	return c.patch(endpoint, "application/json", body, nil)
+}
 
 // PullRequestURL is the browser URL for a pull request.
 func (c *Client) PullRequestURL(repo string, id int) string {

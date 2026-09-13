@@ -1,7 +1,9 @@
 package azdo
 
 import (
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -190,9 +192,9 @@ func TestThreadsKeepsTheWholeConversation(t *testing.T) {
 		 {"id":1,"status":"active","isDeleted":false,
 		  "threadContext":{"filePath":"/internal/azdo/client.go"},
 		  "comments":[
-		    {"commentType":"system","content":"Dev added a reviewer","author":{"displayName":"Azure DevOps"}},
-		    {"commentType":"text","content":"Why the retry cap?","publishedDate":"2026-09-11T09:00:00Z","author":{"displayName":"Other Dev"}},
-		    {"commentType":"text","content":"Three felt right.","publishedDate":"2026-09-11T10:00:00Z","author":{"displayName":"Dev Example"}}]}
+		    {"id":1,"commentType":"system","content":"Dev added a reviewer","author":{"displayName":"Azure DevOps"}},
+		    {"id":2,"commentType":"text","content":"Why the retry cap?","publishedDate":"2026-09-11T09:00:00Z","author":{"displayName":"Other Dev"}},
+		    {"id":3,"commentType":"text","content":"Three felt right.","publishedDate":"2026-09-11T10:00:00Z","author":{"displayName":"Dev Example"}}]}
 		]}`))
 	})
 
@@ -205,11 +207,17 @@ func TestThreadsKeepsTheWholeConversation(t *testing.T) {
 	}
 
 	th := threads[0]
+	if th.ID != 1 {
+		t.Errorf("thread id = %d, want 1, so a reply can address it", th.ID)
+	}
 	if len(th.Comments) != 2 {
 		t.Fatalf("got %d comments, want the two real ones without the system entry", len(th.Comments))
 	}
 	if th.Comments[1].Text != "Three felt right." {
 		t.Errorf("the reply is missing: %+v", th.Comments)
+	}
+	if th.Comments[0].ID != 2 {
+		t.Errorf("opener comment id = %d, want 2, so a reply can name it as the parent", th.Comments[0].ID)
 	}
 	if th.Comments[0].Created.IsZero() {
 		t.Error("publishedDate did not parse")
@@ -222,5 +230,91 @@ func TestThreadsKeepsTheWholeConversation(t *testing.T) {
 	}
 	if th.Opener().Author != "Other Dev" {
 		t.Errorf("Opener = %+v, want the first real comment", th.Opener())
+	}
+}
+
+func TestReplyToThreadPostsAComment(t *testing.T) {
+	var method, path, body string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		buf, _ := io.ReadAll(r.Body)
+		body = string(buf)
+		w.Write([]byte(`{"id":9,"content":"Three felt right.",
+		 "publishedDate":"2026-09-11T10:00:00Z","author":{"displayName":"Dev Example"}}`))
+	})
+
+	comment, err := c.ReplyToThread("r1", 512, 1, 2, "Three felt right.")
+	if err != nil {
+		t.Fatalf("ReplyToThread returned %v", err)
+	}
+	if method != http.MethodPost {
+		t.Errorf("method = %s, want POST", method)
+	}
+	if path != "/acme/Platform/_apis/git/repositories/r1/pullRequests/512/threads/1/comments" {
+		t.Errorf("path = %q", path)
+	}
+	for _, want := range []string{`"content":"Three felt right."`, `"parentCommentId":2`, `"commentType":"text"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body = %s, want it to contain %s", body, want)
+		}
+	}
+	if comment.ID != 9 || comment.Author != "Dev Example" || comment.Text != "Three felt right." {
+		t.Errorf("comment = %+v, want the server's created comment", comment)
+	}
+	if comment.Created.IsZero() {
+		t.Error("publishedDate did not parse")
+	}
+}
+
+func TestReplyToThreadReportsAServerRefusal(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"message":"TF401180: thread does not exist"}`))
+	})
+
+	_, err := c.ReplyToThread("r1", 512, 99, 1, "hi")
+	if err == nil || !strings.Contains(err.Error(), "TF401180") {
+		t.Errorf("error = %v, want the server message", err)
+	}
+}
+
+func TestSetThreadStatusSendsPlainJSON(t *testing.T) {
+	var method, path, contentType, body string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		contentType = r.Header.Get("Content-Type")
+		buf, _ := io.ReadAll(r.Body)
+		body = string(buf)
+		w.Write([]byte(`{"id":1,"status":"fixed"}`))
+	})
+
+	if err := c.SetThreadStatus("r1", 512, 1, "fixed"); err != nil {
+		t.Fatalf("SetThreadStatus returned %v", err)
+	}
+	if method != http.MethodPatch {
+		t.Errorf("method = %s, want PATCH", method)
+	}
+	if path != "/acme/Platform/_apis/git/repositories/r1/pullRequests/512/threads/1" {
+		t.Errorf("path = %q", path)
+	}
+	// Unlike a work item update, this is ordinary JSON rather than a patch
+	// document.
+	if contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", contentType)
+	}
+	if body != `{"status":"fixed"}` {
+		t.Errorf("body = %q", body)
+	}
+}
+
+func TestSetThreadStatusReportsAServerRefusal(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"message":"TF401320: invalid status"}`))
+	})
+
+	err := c.SetThreadStatus("r1", 512, 1, "fixed")
+	if err == nil || !strings.Contains(err.Error(), "TF401320") {
+		t.Errorf("error = %v, want the server message", err)
 	}
 }

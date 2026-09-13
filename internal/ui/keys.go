@@ -31,6 +31,8 @@ var (
 	keyPullRequest = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open pull request"))
 	keyTop         = key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top"))
 	keyBottom      = key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom"))
+	keyReply       = key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "reply"))
+	keyResolve     = key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "resolve"))
 )
 
 // sharedBindings are the keys every list view carries, in the order the short
