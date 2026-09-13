@@ -33,6 +33,10 @@ var (
 	keyBottom      = key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom"))
 	keyReply       = key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "reply"))
 	keyResolve     = key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "resolve"))
+	// keyDiff is capital D because d is already the draft filter on the pull
+	// request list, and a key that means one thing on the list and another on
+	// the pane it opens is the sort of thing nobody remembers.
+	keyDiff = key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "diff"))
 
 	keyApprove = key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "approve"))
 	keyWait    = key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "wait for author"))

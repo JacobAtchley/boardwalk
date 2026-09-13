@@ -440,6 +440,22 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 			m.loaded, m.failed = false, false
 			m.linkedLoaded, m.linkedErr = false, false
 			return m, m.Init()
+		case key.Matches(msg, keyDiff):
+			// Reachable only with neither modal state open, because both of
+			// them are handled above and swallow every key they do not
+			// recognise. That is the right answer rather than an oversight: a
+			// vote armed by A is confirmed by a second A, and pushing a whole
+			// view over the top would leave that arm alive underneath a screen
+			// with no room to say so. The status line keeps saying what is
+			// pending, so esc-then-D is one keystroke away and the reader can
+			// see why.
+			if m.pr.SourceCommit == "" || m.pr.TargetCommit == "" {
+				// Nothing to diff against: see PullRequest.SourceCommit.
+				m.status, m.failed = "Azure DevOps has not computed this pull request's merge yet, so there is nothing to diff", false
+				return m, nil
+			}
+			diff := NewPullRequestDiff(m.client, m.pr)
+			return m, func() tea.Msg { return PushMsg{View: diff} }
 		case key.Matches(msg, keyLinkedItem):
 			if len(m.linked) == 0 {
 				m.status = "no work items are linked to this pull request"
@@ -634,7 +650,7 @@ func (m *PullRequestDetail) Title() string {
 
 // Keys omits the filter: there is nothing here to filter.
 func (m *PullRequestDetail) Keys() help.KeyMap {
-	own := []key.Binding{keyLinkedItem, keyReply, keyResolve, keyApprove, keyWait, keyReject, keyTop, keyBottom, keyRefresh}
+	own := []key.Binding{keyDiff, keyLinkedItem, keyReply, keyResolve, keyApprove, keyWait, keyReject, keyTop, keyBottom, keyRefresh}
 	return keyMap{
 		short:  append(append([]key.Binding{}, own...), keyCopyID, keyBack, keyHelp),
 		groups: [][]key.Binding{own, {keyCopyID, keySlack, keyOpen}, navBindings()},

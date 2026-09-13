@@ -65,6 +65,13 @@ var (
 	menuItem    = lipgloss.NewStyle().PaddingLeft(2)
 	menuPicked  = lipgloss.NewStyle().PaddingLeft(0).Foreground(colCoral).Bold(true)
 
+	// addedLine and removedLine are the diff pane's two colours. They are
+	// statusStyle and errStyle by another name — green for what arrived, red
+	// for what went — but a deleted line is not an error, and reading
+	// errStyle.Render(line) in the diff renderer would say it was.
+	addedLine   = lipgloss.NewStyle().Foreground(colOK)
+	removedLine = lipgloss.NewStyle().Foreground(colErr)
+
 	detailPane = lipgloss.NewStyle().
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderLeft(true).

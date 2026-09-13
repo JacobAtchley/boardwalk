@@ -9,8 +9,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// listShare is the fraction of the width the list takes, leaving the rest for
-// the detail pane.
+// listShare is the fraction of the width the list takes by default, leaving the
+// rest for the detail pane.
 const listShare = 3.0 / 5.0
 
 // Row is one line in a browser. Every view's row type implements it, which is
@@ -38,6 +38,16 @@ type Browser struct {
 	// Detail renders the pane on the right for the selected row.
 	Detail func(Row, int) string
 
+	// ListShare is the fraction of the width the list takes. Set it before the
+	// first SetSize — that call short-circuits once the size stops changing, so
+	// a later change would not be picked up until the terminal is resized.
+	//
+	// The three list views leave it at listShare, where the rows are the
+	// content and the pane beside them is a summary. The diff view turns it
+	// down: its rows are file paths and its pane is source code, which only
+	// reads at a width the default does not leave.
+	ListShare float64
+
 	list   list.Model
 	detail viewport.Model
 
@@ -61,9 +71,10 @@ func NewBrowser() Browser {
 	l.InfiniteScrolling = false
 
 	return Browser{
-		Detail: func(Row, int) string { return "" },
-		list:   l,
-		detail: viewport.New(0, 0),
+		Detail:    func(Row, int) string { return "" },
+		ListShare: listShare,
+		list:      l,
+		detail:    viewport.New(0, 0),
 	}
 }
 
@@ -93,7 +104,13 @@ func (b *Browser) SetSize(width, height int) {
 	}
 	b.width, b.height = width, height
 
-	listWidth := int(float64(width) * listShare)
+	share := b.ListShare
+	if share <= 0 || share >= 1 {
+		// A share outside the open interval would hand one of the two panes
+		// every column and the other none.
+		share = listShare
+	}
+	listWidth := int(float64(width) * share)
 	detailWidth := width - listWidth - 4
 
 	b.list.SetSize(listWidth, height)
