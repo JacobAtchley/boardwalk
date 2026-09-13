@@ -33,6 +33,18 @@ type stateSetMsg struct {
 	Err   error
 }
 
+// assigneeSetMsg is stateSetMsg's counterpart for assign-to-me. It carries
+// Assigned and AssignedKey rather than leaving the view to reconstruct them:
+// a row has to update both together on success, since AssignedKey is what
+// the mine scope filter reads and Assigned is what the person sees, and
+// updating one without the other would leave them disagreeing.
+type assigneeSetMsg struct {
+	ID          int
+	Assigned    string
+	AssignedKey string
+	Err         error
+}
+
 // pickRepo finds the repository the working directory belongs to among the
 // project's repositories.
 func pickRepo(repos []azdo.Repo, want string) (azdo.Repo, bool) {
@@ -135,5 +147,20 @@ func shellQuote(s string) string {
 func stateCmd(c *azdo.Client, id int, state string) tea.Cmd {
 	return func() tea.Msg {
 		return stateSetMsg{ID: id, State: state, Err: c.SetState(id, state)}
+	}
+}
+
+// assignCmd assigns a work item to the signed-in user. It is the caller's job
+// to not reach here with Client.Me empty — see Client.Me's own doc — since an
+// empty uniqueName is a deliberate unassign at the client layer, not
+// something this command guards against a second time.
+//
+// Assigned is set to the same string as AssignedKey: az account show only
+// hands NewClient a uniqueName, never a display name, so that is what the
+// row shows until a real fetch replaces it with what the server has.
+func assignCmd(c *azdo.Client, id int) tea.Cmd {
+	return func() tea.Msg {
+		me := c.Me
+		return assigneeSetMsg{ID: id, Assigned: me, AssignedKey: me, Err: c.SetAssignee(id, me)}
 	}
 }

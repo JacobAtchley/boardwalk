@@ -238,6 +238,71 @@ func TestWorkItemsFailedFetchReplacesTheFetchingPlaceholder(t *testing.T) {
 	}
 }
 
+func TestAssignToMeSendsTheCommandAndSyncsTheRowOnSuccess(t *testing.T) {
+	c, items := fixture()
+	m := sized(t, NewWorkItems(c, items, false, false))
+	// Select the row that starts unassigned entirely, so a row moving into
+	// the mine scope proves the fix rather than a row that was already
+	// there under a different display name.
+	m.browser.list.Select(1) // 4020, "(unassigned)"
+
+	m, cmd := press(t, m, runes("m"))
+	if cmd == nil {
+		t.Fatal("m produced no command")
+	}
+	if status, isErr := m.Status(); isErr || !strings.Contains(status, "assigning #4020") {
+		t.Errorf("status = %q, isErr = %v; want the assign in flight reported", status, isErr)
+	}
+
+	// The command itself talks to the real client (proven separately by
+	// TestSetAssigneeSendsAJSONPatch); what matters here is what the view
+	// does with the message assignCmd resolves to.
+	updated, _ := m.Update(assigneeSetMsg{ID: 4020, Assigned: "dev@acme.test", AssignedKey: "dev@acme.test"})
+	m = updated.(*WorkItems)
+
+	if status, isErr := m.Status(); isErr || !strings.Contains(status, "assigned to you") {
+		t.Errorf("status = %q, isErr = %v; want the assignment reported", status, isErr)
+	}
+	// The scope filter reads AssignedKey, not Assigned, so proving the count
+	// moved is what proves the filter — not just the display text — was kept
+	// honest without a refetch.
+	if !strings.Contains(m.Title(), "all 3") {
+		t.Errorf("title = %q, want the all count unchanged", m.Title())
+	}
+	m, _ = press(t, m, tea.KeyMsg{Type: tea.KeyCtrlT})
+	if !strings.Contains(m.Title(), "mine 3") {
+		t.Errorf("title = %q, want mine to have picked up the newly assigned row", m.Title())
+	}
+}
+
+func TestAssignToMeRefusesWhenTheSignedInUserIsUnknown(t *testing.T) {
+	_, items := fixture()
+	c := &azdo.Client{Org: "acme", Project: "Platform"} // az account show failed
+	m := sized(t, NewWorkItems(c, items, false, false))
+
+	m, cmd := press(t, m, runes("m"))
+	if cmd != nil {
+		t.Fatal("m sent a command despite Client.Me being empty — this would silently unassign the item")
+	}
+	status, isErr := m.Status()
+	if !isErr || !strings.Contains(status, "unknown") {
+		t.Errorf("status = %q, isErr = %v; want the unknown-identity message", status, isErr)
+	}
+}
+
+func TestAssigneeSetErrorGoesToTheStatusLine(t *testing.T) {
+	c, items := fixture()
+	m := sized(t, NewWorkItems(c, items, false, false))
+
+	updated, _ := m.Update(assigneeSetMsg{ID: 4020, Err: errTest})
+	m = updated.(*WorkItems)
+
+	status, isErr := m.Status()
+	if !isErr || !strings.Contains(status, errTest.Error()) {
+		t.Errorf("status = %q, isErr = %v; want the failure reported", status, isErr)
+	}
+}
+
 func TestWorkItemsRefetchesOnR(t *testing.T) {
 	c, items := fixture()
 	m := sized(t, NewWorkItems(c, items, false, false))

@@ -21,6 +21,10 @@ var (
 
 	keyScope  = key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("^t", "scope"))
 	keyActive = key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "set active"))
+	// keyAssign is "m" for "mine": a is already taken by the fast path to
+	// Active, so assigning gets the mnemonic instead of a letter that would
+	// need its own justification.
+	keyAssign = key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "assign to me"))
 	// keyState is capital because s is already "copy slack link"; a is kept
 	// alongside it rather than folded in, since Active is the common case the
 	// picker would otherwise make one keystroke slower.

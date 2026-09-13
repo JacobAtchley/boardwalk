@@ -80,6 +80,9 @@ type Item struct {
 	// "the discussion did not load" — setting it for an unrelated state
 	// error would draw that section as broken when it never was.
 	stateErr bool
+	// assignErr mirrors stateErr for the same reason, for an assign that
+	// failed or was refused before it was even attempted (an unknown Me).
+	assignErr bool
 }
 
 // NewItem builds the view. comments is whatever the list already had cached,
@@ -217,6 +220,19 @@ func (m *Item) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.invalidate()
 		return m, nil
 
+	case assigneeSetMsg:
+		if msg.ID != m.item.ID {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.status, m.assignErr = msg.Err.Error(), true
+			return m, nil
+		}
+		m.item.Assigned, m.item.AssignedKey = msg.Assigned, msg.AssignedKey
+		m.status, m.assignErr = fmt.Sprintf("#%d is now assigned to you", msg.ID), false
+		m.invalidate()
+		return m, nil
+
 	case StatusMsg:
 		m.status = msg.Text
 		return m, nil
@@ -263,6 +279,16 @@ func (m *Item) Update(msg tea.Msg) (View, tea.Cmd) {
 		case key.Matches(msg, keyState):
 			m.statePicker = newStatePicker(m.item.ID)
 			return m, statesCmd(m.client, m.item.ID, m.item.Type)
+		case key.Matches(msg, keyAssign):
+			// An empty Me means az account show failed at startup — sending it
+			// as the assignee would unassign the item instead of claiming it,
+			// which is the opposite of what the key means and destructive.
+			if m.client.Me == "" {
+				m.status, m.assignErr = "cannot assign: the signed-in user is unknown", true
+				return m, nil
+			}
+			m.status, m.assignErr = fmt.Sprintf("assigning #%d to you…", m.item.ID), false
+			return m, assignCmd(m.client, m.item.ID)
 		case key.Matches(msg, keyLinkedPR):
 			// The newest link: a work item that has been through more than one
 			// pull request is almost always asking about its latest.
@@ -383,7 +409,7 @@ func (m *Item) Title() string {
 
 // Keys omits the filter: there is nothing here to filter.
 func (m *Item) Keys() help.KeyMap {
-	own := []key.Binding{keyState, keyLinkedPR, keyTop, keyBottom, keyRefresh}
+	own := []key.Binding{keyState, keyAssign, keyLinkedPR, keyTop, keyBottom, keyRefresh}
 	return keyMap{
 		short:  append(append([]key.Binding{}, own...), keyCopyID, keyBack, keyHelp),
 		groups: [][]key.Binding{own, {keyCopyID, keySlack, keyOpen}, navBindings()},
@@ -394,7 +420,7 @@ func (m *Item) Status() (string, bool) {
 	if m.statePicker != nil {
 		return m.statePicker.View(), false
 	}
-	return m.work.View() + m.status, m.failed || m.stateErr
+	return m.work.View() + m.status, m.failed || m.stateErr || m.assignErr
 }
 
 // Prompting reports whether the state picker is open, so Root leaves esc and
