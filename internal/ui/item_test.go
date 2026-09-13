@@ -332,3 +332,131 @@ func TestItemSaysSoWhenThereIsNoLinkedPullRequestToOpen(t *testing.T) {
 		t.Errorf("status = %q, want p to explain that there is nothing to open", status)
 	}
 }
+
+func TestCommentKeyOpensAPrompt(t *testing.T) {
+	m := newItem(t, nil)
+	r := drive(t, m, 100, 40)
+
+	r.send(runes("c"))
+
+	if m.commentPrompt == nil {
+		t.Fatal("c did not open the comment prompt")
+	}
+	if !m.Prompting() {
+		t.Error("Prompting did not report the open prompt")
+	}
+}
+
+func TestCommentPromptEscapeCancels(t *testing.T) {
+	m := newItem(t, nil)
+	r := drive(t, m, 100, 40)
+	r.send(runes("c"))
+
+	cmd := r.send(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		t.Error("cancelling the prompt started work anyway")
+	}
+	if m.commentPrompt != nil {
+		t.Error("escape did not close the prompt")
+	}
+}
+
+func TestCommentPromptSwallowsActionKeys(t *testing.T) {
+	// With the prompt open, "S" is a letter rather than the state-picker key.
+	m := newItem(t, nil)
+	r := drive(t, m, 100, 40)
+	r.send(runes("c"))
+
+	r.send(runes("S"))
+	if !strings.HasSuffix(m.commentPrompt.Value(), "S") {
+		t.Errorf("prompt = %q, want the keystroke in it", m.commentPrompt.Value())
+	}
+	if m.statePicker != nil {
+		t.Error("S opened the state picker despite the comment prompt owning the keyboard")
+	}
+}
+
+func TestCommentPromptEnterSendsAndAppendsTheCommentWithoutARefetch(t *testing.T) {
+	m := newItem(t, []azdo.Comment{{Author: "Other Dev", Text: "Why the retry cap?"}})
+	r := drive(t, m, 100, 40)
+	r.send(runes("c"))
+	r.send(runes("Three felt right."))
+
+	cmd := r.send(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter produced no command")
+	}
+	if m.commentPrompt != nil {
+		t.Error("the prompt is still open after sending")
+	}
+
+	// The command that actually talks to Azure DevOps is never run in a
+	// test — its result is delivered directly, the same way the reply
+	// prompt's tests drive replySentMsg without executing replyCmd.
+	r.send(commentSentMsg{ID: 4021, Comment: azdo.Comment{Author: "Dev Example", Text: "Three felt right."}})
+
+	status, isErr := m.Status()
+	if isErr {
+		t.Errorf("status = %q, reported as an error", status)
+	}
+	if !strings.Contains(r.frame(), "Three felt right.") {
+		t.Error("the new comment did not appear in the discussion — the cache was not updated in place")
+	}
+	if !strings.Contains(r.frame(), "Why the retry cap?") {
+		t.Error("the existing comment disappeared — this should append, not replace")
+	}
+}
+
+func TestCommentPromptEnterOnBlankTextClosesWithoutSending(t *testing.T) {
+	m := newItem(t, nil)
+	r := drive(t, m, 100, 40)
+	r.send(runes("c"))
+
+	cmd := r.send(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Error("sending a blank comment started work anyway")
+	}
+	if m.commentPrompt != nil {
+		t.Error("the prompt did not close")
+	}
+}
+
+func TestCommentSentReportsAFailure(t *testing.T) {
+	m := newItem(t, nil)
+	r := drive(t, m, 100, 40)
+
+	r.send(commentSentMsg{ID: 4021, Err: errTest})
+
+	status, isErr := m.Status()
+	if !isErr || !strings.Contains(status, errTest.Error()) {
+		t.Errorf("status = %q, isErr = %v", status, isErr)
+	}
+}
+
+func TestCommentSentIgnoresAnotherWorkItem(t *testing.T) {
+	m := newItem(t, nil)
+	r := drive(t, m, 100, 40)
+
+	r.send(commentSentMsg{ID: 9999, Comment: azdo.Comment{Text: "stale"}})
+
+	if strings.Contains(r.frame(), "stale") {
+		t.Error("a comment belonging to another work item was applied")
+	}
+}
+
+func TestCommentKeyDoesNothingWhileTheStatePickerIsOpen(t *testing.T) {
+	// The state picker owns every key while it is open, so c should not open
+	// a second modal underneath it.
+	m := newItem(t, nil)
+	r := drive(t, m, 100, 40)
+	r.send(runes("S"))
+	if m.statePicker == nil {
+		t.Fatal("S did not open the state picker")
+	}
+
+	r.send(runes("c"))
+
+	if m.commentPrompt != nil {
+		t.Error("c opened the comment prompt while the state picker was already open")
+	}
+}

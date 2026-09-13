@@ -41,6 +41,11 @@ var (
 	keyBottom      = key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom"))
 	keyReply       = key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "reply"))
 	keyResolve     = key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "resolve"))
+	// keyComment shares its letter with keyReply on purpose: answering a
+	// thread and commenting on a work item are the same action — add to the
+	// discussion — on two different views, so the same mnemonic serves both
+	// rather than one of them needing an unrelated letter to stay free.
+	keyComment = key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "comment"))
 	// keyDiff is capital D because d is already the draft filter on the pull
 	// request list, and a key that means one thing on the list and another on
 	// the pane it opens is the sort of thing nobody remembers.

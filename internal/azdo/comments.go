@@ -46,3 +46,32 @@ func (c *Client) Comments(id int) ([]Comment, error) {
 	}
 	return comments, nil
 }
+
+// AddComment posts a new comment to a work item's discussion. It is built
+// against CommentsAPIVersion rather than the pinned APIVersion, for the same
+// reason the read above is: this endpoint has never left preview, and the
+// plain version already 404s on the GET side of it.
+func (c *Client) AddComment(id int, text string) (Comment, error) {
+	body := struct {
+		Text string `json:"text"`
+	}{Text: text}
+
+	var resp struct {
+		Text      string    `json:"text"`
+		Created   time.Time `json:"createdDate"`
+		CreatedBy struct {
+			DisplayName string `json:"displayName"`
+		} `json:"createdBy"`
+	}
+
+	endpoint := fmt.Sprintf("%s/%s/%s/_apis/wit/workItems/%d/comments?api-version=%s",
+		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project), id, CommentsAPIVersion)
+	if err := c.post(endpoint, body, &resp); err != nil {
+		return Comment{}, err
+	}
+	return Comment{
+		Author:  resp.CreatedBy.DisplayName,
+		Created: resp.Created,
+		Text:    Markdown(resp.Text),
+	}, nil
+}
