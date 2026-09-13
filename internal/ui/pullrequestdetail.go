@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -27,6 +28,24 @@ type linkedItemsMsg struct {
 	PR    int
 	Items []azdo.WorkItem
 	Err   error
+}
+
+// replySentMsg carries the outcome of answering a thread. PR names which pull
+// request it belongs to for the same reason threadsLoadedMsg does: Root
+// broadcasts data to every view in the stack, and two of these views can be
+// open at once (a pull request whose linked work item links back to another).
+type replySentMsg struct {
+	PR       int
+	ThreadID int
+	Comment  azdo.ThreadComment
+	Err      error
+}
+
+// threadResolvedMsg carries the outcome of resolving a thread.
+type threadResolvedMsg struct {
+	PR       int
+	ThreadID int
+	Err      error
 }
 
 // PullRequestDetail is one pull request in full: the description, every
@@ -57,6 +76,15 @@ type PullRequestDetail struct {
 	status string
 	work   work
 	now    func() time.Time
+
+	// replyPrompt is non-nil while a reply to a thread is being typed.
+	replyPrompt *textinput.Model
+	// replyThread and replyParent name the thread and the comment being
+	// answered. They are captured when the prompt opens rather than
+	// recomputed from replyPrompt.Value() alone, because selectedThread
+	// cannot be asked again once the reply's network round trip returns —
+	// by then the discussion may have changed under it.
+	replyThread, replyParent int
 }
 
 // NewPullRequestDetail builds the view. threads is whatever the list had
@@ -119,6 +147,59 @@ func (m *PullRequestDetail) fetchLinked() tea.Cmd {
 	}
 }
 
+// selectedThread is the thread c and R act on. The discussion has no cursor
+// of its own — renderThreads already sorts unresolved threads to the top, so
+// the first one found is the one sitting at the top of the section, the same
+// "first" precedent renderLinked uses for the linked work item w opens.
+func (m *PullRequestDetail) selectedThread() (azdo.Thread, bool) {
+	for _, t := range m.threads {
+		if !t.Resolved {
+			return t, true
+		}
+	}
+	return azdo.Thread{}, false
+}
+
+// replyCmd posts a reply to threadID, answering parentCommentID.
+func (m *PullRequestDetail) replyCmd(threadID, parentCommentID int, text string) tea.Cmd {
+	client, repo, pr := m.client, m.pr.RepoID, m.pr.ID
+	return func() tea.Msg {
+		comment, err := client.ReplyToThread(repo, pr, threadID, parentCommentID, text)
+		if err != nil {
+			return replySentMsg{PR: pr, ThreadID: threadID, Err: fmt.Errorf("could not post the reply: %w", err)}
+		}
+		return replySentMsg{PR: pr, ThreadID: threadID, Comment: comment}
+	}
+}
+
+// resolveCmd marks threadID fixed.
+func (m *PullRequestDetail) resolveCmd(threadID int) tea.Cmd {
+	client, repo, pr := m.client, m.pr.RepoID, m.pr.ID
+	return func() tea.Msg {
+		if err := client.SetThreadStatus(repo, pr, threadID, "fixed"); err != nil {
+			return threadResolvedMsg{PR: pr, ThreadID: threadID, Err: fmt.Errorf("could not resolve the thread: %w", err)}
+		}
+		return threadResolvedMsg{PR: pr, ThreadID: threadID}
+	}
+}
+
+// updateThread rewrites the cached thread with id in place and reports
+// whether one was found. A reply or a resolve is rewritten here rather than
+// by refetching the discussion: refetching would also throw away the scroll
+// position renderThreads' viewport is holding, for one round trip whose
+// result — the single comment or status this view just sent — is already
+// known without asking the server again.
+func (m *PullRequestDetail) updateThread(id int, edit func(*azdo.Thread)) bool {
+	for i, t := range m.threads {
+		if t.ID == id {
+			edit(&t)
+			m.threads[i] = t
+			return true
+		}
+	}
+	return false
+}
+
 func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case spinner.TickMsg:
@@ -152,11 +233,65 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.invalidate()
 		return m, nil
 
+	case replySentMsg:
+		if msg.PR != m.pr.ID {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.status, m.failed = msg.Err.Error(), true
+			return m, nil
+		}
+		m.updateThread(msg.ThreadID, func(t *azdo.Thread) {
+			t.Comments = append(t.Comments, msg.Comment)
+		})
+		m.status, m.failed = "reply sent", false
+		m.invalidate()
+		return m, nil
+
+	case threadResolvedMsg:
+		if msg.PR != m.pr.ID {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.status, m.failed = msg.Err.Error(), true
+			return m, nil
+		}
+		m.updateThread(msg.ThreadID, func(t *azdo.Thread) {
+			t.Status, t.Resolved = "fixed", true
+		})
+		m.status, m.failed = "thread resolved", false
+		m.invalidate()
+		return m, nil
+
 	case StatusMsg:
 		m.status = msg.Text
 		return m, nil
 
 	case tea.KeyMsg:
+		// The reply prompt owns every key while it is open, including esc and
+		// the letters that are otherwise actions — typing "o" into it must add
+		// the letter, not open a browser. Mirrors the branch prompt in
+		// workitems.go.
+		if m.replyPrompt != nil {
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.replyPrompt = nil
+				m.status, m.failed = "", false
+				return m, nil
+			case tea.KeyEnter:
+				text := strings.TrimSpace(m.replyPrompt.Value())
+				m.replyPrompt = nil
+				if text == "" {
+					return m, nil
+				}
+				m.status, m.failed = "sending reply…", false
+				return m, m.replyCmd(m.replyThread, m.replyParent, text)
+			}
+			input, cmd := m.replyPrompt.Update(msg)
+			m.replyPrompt = &input
+			return m, cmd
+		}
+
 		switch {
 		case key.Matches(msg, keyBack):
 			return m, func() tea.Msg { return PopMsg{} }
@@ -177,6 +312,26 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 			}
 			item := NewItem(m.client, m.linked[0], nil)
 			return m, func() tea.Msg { return PushMsg{View: item} }
+		case key.Matches(msg, keyReply):
+			t, ok := m.selectedThread()
+			if !ok {
+				m.status, m.failed = "no unresolved thread to reply to", false
+				return m, nil
+			}
+			input := textinput.New()
+			input.Prompt = "reply: "
+			input.Focus()
+			m.replyPrompt = &input
+			m.replyThread, m.replyParent = t.ID, t.Opener().ID
+			return m, textinput.Blink
+		case key.Matches(msg, keyResolve):
+			t, ok := m.selectedThread()
+			if !ok {
+				m.status, m.failed = "no unresolved thread to resolve", false
+				return m, nil
+			}
+			m.status, m.failed = "resolving…", false
+			return m, m.resolveCmd(t.ID)
 		}
 
 		if status, handled := SharedAction(prDetailRow{m.pr, m.client.PullRequestURL(m.pr.Repo, m.pr.ID)}, msg); handled {
@@ -293,17 +448,19 @@ func (m *PullRequestDetail) renderThreads(b *strings.Builder, width int) {
 		return
 	}
 
+	selected, hasSelected := m.selectedThread()
+
 	for _, pass := range []bool{false, true} {
 		for _, t := range m.threads {
 			if t.Resolved != pass {
 				continue
 			}
-			m.renderThread(b, t, width)
+			m.renderThread(b, t, hasSelected && t.ID == selected.ID, width)
 		}
 	}
 }
 
-func (m *PullRequestDetail) renderThread(b *strings.Builder, t azdo.Thread, width int) {
+func (m *PullRequestDetail) renderThread(b *strings.Builder, t azdo.Thread, selected bool, width int) {
 	marker := warnStyle.Render("● unresolved")
 	if t.Resolved {
 		marker = statusStyle.Render("✓ resolved")
@@ -312,6 +469,12 @@ func (m *PullRequestDetail) renderThread(b *strings.Builder, t azdo.Thread, widt
 	head := marker
 	if t.File != "" {
 		head += chromeStyle.Render("  " + truncate(t.File, max(10, width-20)))
+	}
+	if selected {
+		// c and R always act on the first unresolved thread — the same
+		// "first" precedent renderLinked uses for w — so that thread says so
+		// rather than leaving the reader to guess which one a keypress hits.
+		head += chromeStyle.Render("  c replies · R resolves")
 	}
 	fmt.Fprintf(b, "\n%s\n", head)
 
@@ -329,15 +492,26 @@ func (m *PullRequestDetail) Title() string {
 
 // Keys omits the filter: there is nothing here to filter.
 func (m *PullRequestDetail) Keys() help.KeyMap {
-	own := []key.Binding{keyLinkedItem, keyTop, keyBottom, keyRefresh}
+	own := []key.Binding{keyLinkedItem, keyReply, keyResolve, keyTop, keyBottom, keyRefresh}
 	return keyMap{
 		short:  append(append([]key.Binding{}, own...), keyCopyID, keyBack, keyHelp),
 		groups: [][]key.Binding{own, {keyCopyID, keySlack, keyOpen}, navBindings()},
 	}
 }
 
+// Status shows the reply prompt in place of the transient line while it is
+// open, the same swap the branch prompt makes in workitems.go.
 func (m *PullRequestDetail) Status() (string, bool) {
+	if m.replyPrompt != nil {
+		return m.replyPrompt.View(), false
+	}
 	return m.work.View() + m.status, m.failed
+}
+
+// Prompting reports whether the reply prompt is open, so Root leaves esc and
+// q to it rather than treating them as navigation.
+func (m *PullRequestDetail) Prompting() bool {
+	return m.replyPrompt != nil
 }
 
 // prDetailRow adapts the pull request to the shared copy and open actions, so

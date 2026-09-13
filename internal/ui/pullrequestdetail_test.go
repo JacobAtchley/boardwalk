@@ -290,3 +290,191 @@ func TestPullRequestDetailSaysSoWhenThereIsNoWorkItemToOpen(t *testing.T) {
 		t.Errorf("status = %q, want w to explain that there is nothing to open", status)
 	}
 }
+
+// threadWithOpener builds a single-comment thread whose opener carries id,
+// which is what a reply has to name as its parent.
+func threadWithOpener(threadID, openerID int, resolved bool, author, text string) azdo.Thread {
+	status := "active"
+	if resolved {
+		status = "fixed"
+	}
+	return azdo.Thread{ID: threadID, Status: status, Resolved: resolved,
+		Comments: []azdo.ThreadComment{{ID: openerID, Author: author, Text: text}}}
+}
+
+func TestReplyKeyOpensAPromptOnTheFirstUnresolvedThread(t *testing.T) {
+	m := newPRDetail(t, []azdo.Thread{
+		threadWithOpener(1, 10, true, "A", "settled"),
+		threadWithOpener(2, 20, false, "Other Dev", "Why the retry cap?"),
+	})
+	r := drive(t, m, 100, 60)
+
+	r.send(runes("c"))
+
+	if m.replyPrompt == nil {
+		t.Fatal("c did not open the reply prompt")
+	}
+	if !m.Prompting() {
+		t.Error("Prompting did not report the open prompt")
+	}
+	// Replying always answers the unresolved thread's opener — the fixed
+	// thread's comment is not a valid target even though it comes first in
+	// m.threads.
+	if m.replyThread != 2 || m.replyParent != 20 {
+		t.Errorf("reply target = thread %d, parent %d; want the unresolved thread's opener (2, 20)",
+			m.replyThread, m.replyParent)
+	}
+}
+
+func TestReplyKeyWithNothingUnresolvedSaysSo(t *testing.T) {
+	m := newPRDetail(t, []azdo.Thread{threadWithOpener(1, 10, true, "A", "settled")})
+	r := drive(t, m, 100, 60)
+
+	r.send(runes("c"))
+
+	if m.replyPrompt != nil {
+		t.Error("c opened a prompt with no unresolved thread to answer")
+	}
+	if status, isErr := m.Status(); isErr || !strings.Contains(status, "no unresolved thread") {
+		t.Errorf("status = %q, isErr = %v, want it to explain there is nothing to reply to", status, isErr)
+	}
+}
+
+func TestReplyPromptEscapeCancels(t *testing.T) {
+	m := newPRDetail(t, []azdo.Thread{threadWithOpener(1, 10, false, "Other Dev", "Why?")})
+	r := drive(t, m, 100, 60)
+	r.send(runes("c"))
+
+	cmd := r.send(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		t.Error("cancelling the prompt started work anyway")
+	}
+	if m.replyPrompt != nil {
+		t.Error("escape did not close the prompt")
+	}
+}
+
+func TestReplyPromptSwallowsActionKeys(t *testing.T) {
+	// With the prompt open, "o" is a letter rather than the open action.
+	m := newPRDetail(t, []azdo.Thread{threadWithOpener(1, 10, false, "Other Dev", "Why?")})
+	r := drive(t, m, 100, 60)
+	r.send(runes("c"))
+
+	r.send(runes("o"))
+	if !strings.HasSuffix(m.replyPrompt.Value(), "o") {
+		t.Errorf("prompt = %q, want the keystroke in it", m.replyPrompt.Value())
+	}
+}
+
+func TestReplyPromptEnterSendsAndAppendsTheCommentWithoutARefetch(t *testing.T) {
+	m := newPRDetail(t, []azdo.Thread{threadWithOpener(1, 10, false, "Other Dev", "Why the retry cap?")})
+	r := drive(t, m, 100, 60)
+	r.send(runes("c"))
+	r.send(runes("Three felt right."))
+
+	cmd := r.send(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter produced no command")
+	}
+	if m.replyPrompt != nil {
+		t.Error("the prompt is still open after sending")
+	}
+
+	// The command that actually talks to Azure DevOps is never run in a test
+	// — its result is delivered directly, the same way the branch flow's
+	// tests drive branchDoneMsg without executing branchCmd.
+	r.send(replySentMsg{PR: 512, ThreadID: 1, Comment: azdo.ThreadComment{ID: 30, Author: "Dev Example", Text: "Three felt right."}})
+
+	status, isErr := m.Status()
+	if isErr {
+		t.Errorf("status = %q, reported as an error", status)
+	}
+	if !strings.Contains(r.frame(), "Three felt right.") {
+		t.Error("the new comment did not appear in the thread — the cache was not updated in place")
+	}
+}
+
+func TestReplyPromptEnterOnBlankTextClosesWithoutSending(t *testing.T) {
+	m := newPRDetail(t, []azdo.Thread{threadWithOpener(1, 10, false, "Other Dev", "Why?")})
+	r := drive(t, m, 100, 60)
+	r.send(runes("c"))
+
+	cmd := r.send(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Error("sending a blank reply started work anyway")
+	}
+	if m.replyPrompt != nil {
+		t.Error("the prompt did not close")
+	}
+}
+
+func TestReplySentReportsAFailure(t *testing.T) {
+	m := newPRDetail(t, []azdo.Thread{threadWithOpener(1, 10, false, "A", "hi")})
+	r := drive(t, m, 100, 60)
+
+	r.send(replySentMsg{PR: 512, ThreadID: 1, Err: errTest})
+
+	status, isErr := m.Status()
+	if !isErr || !strings.Contains(status, errTest.Error()) {
+		t.Errorf("status = %q, isErr = %v", status, isErr)
+	}
+}
+
+func TestReplySentIgnoresAnotherPullRequests(t *testing.T) {
+	m := newPRDetail(t, []azdo.Thread{threadWithOpener(1, 10, false, "A", "hi")})
+	r := drive(t, m, 100, 60)
+
+	r.send(replySentMsg{PR: 511, ThreadID: 1, Comment: azdo.ThreadComment{Text: "stale"}})
+
+	if strings.Contains(r.frame(), "stale") {
+		t.Error("a reply belonging to another pull request was applied")
+	}
+}
+
+func TestResolveKeyMarksTheThreadFixedWithoutARefetch(t *testing.T) {
+	m := newPRDetail(t, []azdo.Thread{threadWithOpener(1, 10, false, "Other Dev", "hi")})
+	r := drive(t, m, 100, 60)
+
+	cmd := r.send(runes("R"))
+	if cmd == nil {
+		t.Fatal("R produced no command")
+	}
+
+	r.send(threadResolvedMsg{PR: 512, ThreadID: 1})
+
+	status, isErr := m.Status()
+	if isErr {
+		t.Errorf("status = %q, reported as an error", status)
+	}
+	if !strings.Contains(r.frame(), "1 resolved, 0 unresolved") {
+		t.Errorf("the tally did not update without a refetch:\n%s", r.frame())
+	}
+	if !strings.Contains(r.frame(), "✓ resolved") {
+		t.Error("the thread does not render as resolved")
+	}
+}
+
+func TestResolveKeyWithNothingUnresolvedSaysSo(t *testing.T) {
+	m := newPRDetail(t, []azdo.Thread{threadWithOpener(1, 10, true, "A", "settled")})
+	r := drive(t, m, 100, 60)
+
+	cmd := r.send(runes("R"))
+	if cmd != nil {
+		t.Error("R started work with nothing unresolved to resolve")
+	}
+	if status, isErr := m.Status(); isErr || !strings.Contains(status, "no unresolved thread") {
+		t.Errorf("status = %q, isErr = %v, want it to explain there is nothing to resolve", status, isErr)
+	}
+}
+
+func TestThreadResolvedReportsAFailure(t *testing.T) {
+	m := newPRDetail(t, []azdo.Thread{threadWithOpener(1, 10, false, "A", "hi")})
+	r := drive(t, m, 100, 60)
+
+	r.send(threadResolvedMsg{PR: 512, ThreadID: 1, Err: errTest})
+
+	status, isErr := m.Status()
+	if !isErr || !strings.Contains(status, errTest.Error()) {
+		t.Errorf("status = %q, isErr = %v", status, isErr)
+	}
+}

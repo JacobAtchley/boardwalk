@@ -165,7 +165,8 @@ listed newest first.
 The side pane is a summary. `enter` opens the pull request itself: the
 description, every reviewer's vote, the work items it is linked to, and every
 discussion — whole threads, not just the line each one opens with — unresolved
-first. `w` opens the first linked work item.
+first. `w` opens the first linked work item. `c` replies to the first
+unresolved thread and `R` resolves it, both without leaving the view.
 
 Between them those two close the loop `b` opens: branch from a work item, and
 the work item knows about the pull request that branch became, and the pull
