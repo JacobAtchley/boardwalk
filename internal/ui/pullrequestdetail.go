@@ -48,6 +48,47 @@ type threadResolvedMsg struct {
 	Err      error
 }
 
+// voteCastMsg carries the outcome of casting a reviewer vote.
+type voteCastMsg struct {
+	PR         int
+	ReviewerID string
+	Vote       int
+	Err        error
+}
+
+// pendingVote is non-nil while a vote is armed, waiting for a second press of
+// the same key to confirm. Approving or rejecting someone else's work is not
+// something a stray keystroke should be able to do, so the key that requests
+// it only arms the vote; firing it takes pressing that key again.
+type pendingVote struct {
+	reviewerID string
+	vote       int
+	label      string // status-line word for the vote, e.g. "approve"
+}
+
+// voteBindings pairs each vote key with the vote it casts and the word the
+// status line uses for it — the one place that mapping lives, so arming and
+// confirming can never disagree about what a key does.
+var voteBindings = []struct {
+	binding key.Binding
+	vote    int
+	label   string
+}{
+	{keyApprove, azdo.VoteApproved, "approve"},
+	{keyWait, azdo.VoteWaitingForAuthor, "wait for author"},
+	{keyReject, azdo.VoteRejected, "reject"},
+}
+
+// matchVoteBinding reports which vote, if any, msg requests.
+func matchVoteBinding(msg tea.KeyMsg) (vote int, label string, ok bool) {
+	for _, vb := range voteBindings {
+		if key.Matches(msg, vb.binding) {
+			return vb.vote, vb.label, true
+		}
+	}
+	return 0, "", false
+}
+
 // PullRequestDetail is one pull request in full: the description, every
 // reviewer's vote, and every discussion rather than the opening line of the
 // unresolved ones.
@@ -85,6 +126,12 @@ type PullRequestDetail struct {
 	// cannot be asked again once the reply's network round trip returns —
 	// by then the discussion may have changed under it.
 	replyThread, replyParent int
+
+	// armedVote is non-nil while a vote is waiting on its confirming
+	// keystroke. It and replyPrompt are never both set: the reply prompt
+	// swallows every key before this view's own bindings are even
+	// considered, so there is nothing left to arm a vote while it is open.
+	armedVote *pendingVote
 }
 
 // NewPullRequestDetail builds the view. threads is whatever the list had
@@ -183,6 +230,73 @@ func (m *PullRequestDetail) resolveCmd(threadID int) tea.Cmd {
 	}
 }
 
+// voteCmd casts reviewerID's vote on this pull request.
+func (m *PullRequestDetail) voteCmd(reviewerID string, vote int) tea.Cmd {
+	client, repo, pr := m.client, m.pr.RepoID, m.pr.ID
+	return func() tea.Msg {
+		if err := client.SetVote(repo, pr, reviewerID, vote); err != nil {
+			return voteCastMsg{PR: pr, ReviewerID: reviewerID, Vote: vote, Err: fmt.Errorf("could not cast the vote: %w", err)}
+		}
+		return voteCastMsg{PR: pr, ReviewerID: reviewerID, Vote: vote}
+	}
+}
+
+// armVote starts (or restarts) the confirm step for vote, naming what the
+// second press will do on the status line.
+func (m *PullRequestDetail) armVote(vote int, label string) {
+	id, ok := azdo.MyReviewerID(m.pr, m.client.Me)
+	if !ok {
+		// MyReviewerID's doc explains why: the vote endpoint wants a GUID that
+		// only appears in the pull request's own reviewers list, so someone
+		// covered solely by a group has nothing to vote with. Arming would
+		// only fail later at the network call, which hides the real reason;
+		// saying so here instead is the whole point of checking before firing.
+		m.armedVote = nil
+		m.status, m.failed = "you are not a direct reviewer on this pull request — only a group is, so there is no id to vote with", true
+		return
+	}
+	m.armedVote = &pendingVote{reviewerID: id, vote: vote, label: label}
+	m.status, m.failed = fmt.Sprintf("press again to %s — esc cancels", label), false
+}
+
+// handleArmedVote resolves a keypress while a vote is armed. esc cancels, the
+// same vote's key confirms and fires it, and a different vote's key re-arms
+// to that vote instead of forcing an esc round trip first. Anything else is
+// swallowed — the arm is a modal state, the same way the reply prompt owns
+// every key while it is open.
+func (m *PullRequestDetail) handleArmedVote(msg tea.KeyMsg) tea.Cmd {
+	if key.Matches(msg, keyBack) {
+		m.armedVote = nil
+		m.status, m.failed = "", false
+		return nil
+	}
+	vote, label, ok := matchVoteBinding(msg)
+	if !ok {
+		return nil
+	}
+	if vote != m.armedVote.vote {
+		m.armVote(vote, label)
+		return nil
+	}
+	id := m.armedVote.reviewerID
+	m.armedVote = nil
+	m.status, m.failed = "casting vote: "+label+"…", false
+	return m.voteCmd(id, vote)
+}
+
+// updateReviewerVote rewrites the cached reviewer's vote in place, the same
+// cache-over-refetch approach updateThread takes below: the vote this view
+// just sent is already known without asking the server again.
+func (m *PullRequestDetail) updateReviewerVote(reviewerID string, vote int) bool {
+	for i, r := range m.pr.Reviewers {
+		if r.ID == reviewerID {
+			m.pr.Reviewers[i].Vote = vote
+			return true
+		}
+	}
+	return false
+}
+
 // updateThread rewrites the cached thread with id in place and reports
 // whether one was found. A reply or a resolve is rewritten here rather than
 // by refetching the discussion: refetching would also throw away the scroll
@@ -263,6 +377,19 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.invalidate()
 		return m, nil
 
+	case voteCastMsg:
+		if msg.PR != m.pr.ID {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.status, m.failed = msg.Err.Error(), true
+			return m, nil
+		}
+		m.updateReviewerVote(msg.ReviewerID, msg.Vote)
+		m.status, m.failed = "vote cast: "+(azdo.Reviewer{Vote: msg.Vote}).VoteLabel(), false
+		m.invalidate()
+		return m, nil
+
 	case StatusMsg:
 		m.status = msg.Text
 		return m, nil
@@ -290,6 +417,14 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 			input, cmd := m.replyPrompt.Update(msg)
 			m.replyPrompt = &input
 			return m, cmd
+		}
+
+		// A vote is the other modal state this view has, alongside the reply
+		// prompt above — only one is ever active, and this one takes every
+		// key too, so that a key meant to confirm or cancel the vote cannot
+		// be read as something else instead.
+		if m.armedVote != nil {
+			return m, m.handleArmedVote(msg)
 		}
 
 		switch {
@@ -332,6 +467,10 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 			}
 			m.status, m.failed = "resolving…", false
 			return m, m.resolveCmd(t.ID)
+		case key.Matches(msg, keyApprove), key.Matches(msg, keyWait), key.Matches(msg, keyReject):
+			vote, label, _ := matchVoteBinding(msg)
+			m.armVote(vote, label)
+			return m, nil
 		}
 
 		if status, handled := SharedAction(prDetailRow{m.pr, m.client.PullRequestURL(m.pr.Repo, m.pr.ID)}, msg); handled {
@@ -392,6 +531,9 @@ func (m *PullRequestDetail) render(width int) string {
 			name += chromeStyle.Render(" (group)")
 		}
 		fmt.Fprintf(&b, "  %s — %s\n", name, voteStyle(r.Vote).Render(r.VoteLabel()))
+	}
+	if _, ok := azdo.MyReviewerID(m.pr, m.client.Me); ok {
+		fmt.Fprintf(&b, "%s\n", chromeStyle.Render("  A approves · W waits for author · X rejects"))
 	}
 
 	fmt.Fprintf(&b, "\n%s\n%s\n", labelStyle.Render("description"),
@@ -492,7 +634,7 @@ func (m *PullRequestDetail) Title() string {
 
 // Keys omits the filter: there is nothing here to filter.
 func (m *PullRequestDetail) Keys() help.KeyMap {
-	own := []key.Binding{keyLinkedItem, keyReply, keyResolve, keyTop, keyBottom, keyRefresh}
+	own := []key.Binding{keyLinkedItem, keyReply, keyResolve, keyApprove, keyWait, keyReject, keyTop, keyBottom, keyRefresh}
 	return keyMap{
 		short:  append(append([]key.Binding{}, own...), keyCopyID, keyBack, keyHelp),
 		groups: [][]key.Binding{own, {keyCopyID, keySlack, keyOpen}, navBindings()},
@@ -508,10 +650,11 @@ func (m *PullRequestDetail) Status() (string, bool) {
 	return m.work.View() + m.status, m.failed
 }
 
-// Prompting reports whether the reply prompt is open, so Root leaves esc and
-// q to it rather than treating them as navigation.
+// Prompting reports whether the reply prompt or an armed vote is open, so
+// Root leaves esc and q to this view rather than treating them as navigation
+// or quit — esc has to cancel the arm, not pop the whole pane.
 func (m *PullRequestDetail) Prompting() bool {
-	return m.replyPrompt != nil
+	return m.replyPrompt != nil || m.armedVote != nil
 }
 
 // prDetailRow adapts the pull request to the shared copy and open actions, so

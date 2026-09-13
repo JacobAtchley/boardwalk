@@ -35,6 +35,27 @@ func NeedsReviewFrom(pr PullRequest, me string, groups []string) bool {
 	return viaGroup
 }
 
+// MyReviewerID finds the id the vote endpoint would need to address me on pr.
+//
+// Client.Me is an email address (uniqueName), but the vote endpoint is keyed
+// by GUID, and boardwalk never fetches the signed-in user's GUID on its own —
+// there is no endpoint here that hands it over in isolation. The only place it
+// appears is inside a pull request's own reviewers list, next to the
+// uniqueName it can be matched against. So a vote is only possible when I am
+// listed as a direct reviewer; if I am only covered by a group, there is
+// nothing in the payload naming me and no id to vote with.
+func MyReviewerID(pr PullRequest, me string) (string, bool) {
+	if me == "" {
+		return "", false
+	}
+	for _, r := range pr.Reviewers {
+		if !r.IsGroup && r.Key == me {
+			return r.ID, r.ID != ""
+		}
+	}
+	return "", false
+}
+
 func inGroups(name string, groups []string) bool {
 	name = strings.TrimSpace(name)
 	if name == "" {

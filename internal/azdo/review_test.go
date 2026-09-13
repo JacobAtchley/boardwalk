@@ -86,6 +86,54 @@ func TestNeedsReviewFrom(t *testing.T) {
 	}
 }
 
+func TestMyReviewerID(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		pr     PullRequest
+		wantID string
+		wantOK bool
+	}{
+		{
+			name:   "a direct reviewer with an id",
+			pr:     pr("other@acme.test", Reviewer{Name: "Dev Example", Key: me, ID: "guid-1"}),
+			wantID: "guid-1",
+			wantOK: true,
+		},
+		{
+			// Only a group covers me: the payload never names me individually,
+			// so there is no id anywhere to vote with.
+			name:   "only a group covers me",
+			pr:     pr("other@acme.test", Reviewer{Name: "platform-devs", IsGroup: true}),
+			wantOK: false,
+		},
+		{
+			name:   "not a reviewer at all",
+			pr:     pr("other@acme.test", Reviewer{Name: "Third Dev", Key: "third@acme.test", ID: "guid-3"}),
+			wantOK: false,
+		},
+		{
+			// A direct entry with no id would be a server bug, but the caller
+			// still needs a clean "no" rather than an empty string it might
+			// send to the endpoint.
+			name:   "a direct reviewer with no id",
+			pr:     pr("other@acme.test", Reviewer{Name: "Dev Example", Key: me}),
+			wantOK: false,
+		},
+	} {
+		id, ok := MyReviewerID(tc.pr, me)
+		if id != tc.wantID || ok != tc.wantOK {
+			t.Errorf("%s: MyReviewerID = (%q, %v), want (%q, %v)", tc.name, id, ok, tc.wantID, tc.wantOK)
+		}
+	}
+}
+
+func TestMyReviewerIDWithoutAnIdentity(t *testing.T) {
+	p := pr("other@acme.test", Reviewer{Name: "Dev Example", Key: me, ID: "guid-1"})
+	if _, ok := MyReviewerID(p, ""); ok {
+		t.Error("an unknown identity matched a reviewer")
+	}
+}
+
 func TestNeedsReviewFromWithoutAnIdentity(t *testing.T) {
 	// az account show can fail without being fatal, leaving Me empty. Matching
 	// everything then would be worse than matching nothing.

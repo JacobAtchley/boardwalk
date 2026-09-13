@@ -88,6 +88,34 @@ func TestPatchSendsTheGivenContentType(t *testing.T) {
 	}
 }
 
+func TestPutSendsTheBodyAndDecodesTheResponse(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("method = %s, want PUT", r.Method)
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", got)
+		}
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"vote":10`) {
+			t.Errorf("body = %q, want the vote in it", body)
+		}
+		w.Write([]byte(`{"id":9}`))
+	})
+
+	var out struct {
+		ID int `json:"id"`
+	}
+	if err := c.put(c.baseURL+"/reviewer", struct {
+		Vote int `json:"vote"`
+	}{Vote: 10}, &out); err != nil {
+		t.Fatalf("put returned %v", err)
+	}
+	if out.ID != 9 {
+		t.Errorf("id = %d, want 9", out.ID)
+	}
+}
+
 func TestErrorsCarryTheAzureMessage(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

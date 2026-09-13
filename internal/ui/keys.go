@@ -33,6 +33,10 @@ var (
 	keyBottom      = key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom"))
 	keyReply       = key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "reply"))
 	keyResolve     = key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "resolve"))
+
+	keyApprove = key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "approve"))
+	keyWait    = key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "wait for author"))
+	keyReject  = key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "reject"))
 )
 
 // sharedBindings are the keys every list view carries, in the order the short
