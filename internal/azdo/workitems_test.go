@@ -76,6 +76,9 @@ func TestMineOf(t *testing.T) {
 func TestBatchFieldsIncludeAcceptanceCriteria(t *testing.T) {
 	var body string
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/acme/Platform/_apis/wit/workitemsbatch" {
+			t.Errorf("batch path = %q, want /acme/Platform/_apis/wit/workitemsbatch", r.URL.Path)
+		}
 		buf, _ := io.ReadAll(r.Body)
 		body = string(buf)
 		w.Write([]byte(`{"value":[{"id":4021,"fields":{
