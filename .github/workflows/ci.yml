@@ -45,3 +45,29 @@ jobs:
       # goroutines and hand the results back through bubbletea's message loop.
       - name: test
         run: go test -race ./...
+
+  # The build job above is the required check and stays on one runner, so its
+  # name cannot move into a matrix. This job is the cross-platform half: the
+  # copy and open actions shell out to a different command on each platform,
+  # and a Windows or Linux build that only ever gets compiled from a Mac is a
+  # claim nobody has checked.
+  platforms:
+    name: platforms
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: build
+        run: go build ./...
+
+      - name: test
+        run: go test -race ./...

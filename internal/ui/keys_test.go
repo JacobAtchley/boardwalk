@@ -45,6 +45,7 @@ func TestEveryBindingCarriesHelpText(t *testing.T) {
 		"review": keyReview, "linked pull request": keyLinkedPR, "linked work item": keyLinkedItem,
 		"item": keyItem, "pull request": keyPullRequest, "reply": keyReply, "resolve": keyResolve,
 		"comment": keyComment, "diff": keyDiff, "approve": keyApprove, "wait": keyWait, "reject": keyReject,
+		"draft toggle": keyDraftToggle,
 	} {
 		h := b.Help()
 		if h.Key == "" || h.Desc == "" {

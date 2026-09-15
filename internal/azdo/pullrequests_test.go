@@ -363,3 +363,64 @@ func TestSetThreadStatusReportsAServerRefusal(t *testing.T) {
 		t.Errorf("error = %v, want the server message", err)
 	}
 }
+
+func TestSetDraftPatchesThePullRequest(t *testing.T) {
+	var method, path, contentType, body string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		contentType = r.Header.Get("Content-Type")
+		buf, _ := io.ReadAll(r.Body)
+		body = string(buf)
+		w.Write([]byte(`{"pullRequestId":512,"isDraft":false}`))
+	})
+
+	if err := c.SetDraft("r1", 512, false); err != nil {
+		t.Fatalf("SetDraft returned %v", err)
+	}
+	if method != http.MethodPatch {
+		t.Errorf("method = %s, want PATCH", method)
+	}
+	if path != "/acme/Platform/_apis/git/repositories/r1/pullRequests/512" {
+		t.Errorf("path = %q", path)
+	}
+	// Ordinary JSON, not the json-patch document a work item update needs.
+	if contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", contentType)
+	}
+	// isDraft alone: a PATCH carrying any other field would overwrite that
+	// field with whatever its zero value happens to be.
+	if body != `{"isDraft":false}` {
+		t.Errorf("body = %q", body)
+	}
+}
+
+func TestSetDraftSendsTrueWhenMarkingADraft(t *testing.T) {
+	var body string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		body = string(buf)
+		w.Write([]byte(`{"pullRequestId":512,"isDraft":true}`))
+	})
+
+	if err := c.SetDraft("r1", 512, true); err != nil {
+		t.Fatalf("SetDraft returned %v", err)
+	}
+	if body != `{"isDraft":true}` {
+		t.Errorf("body = %q", body)
+	}
+}
+
+func TestSetDraftReportsAServerRefusal(t *testing.T) {
+	// Publishing someone else's pull request needs a permission the signed-in
+	// user may not have, and the refusal is the server's to make: boardwalk
+	// does not guess at who is allowed, it repeats what it was told.
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"message":"TF401027: you need Contribute permission"}`))
+	})
+
+	err := c.SetDraft("r1", 512, false)
+	if err == nil || !strings.Contains(err.Error(), "TF401027") {
+		t.Errorf("error = %v, want the server message", err)
+	}
+}

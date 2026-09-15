@@ -372,6 +372,31 @@ func (c *Client) SetVote(repoID string, prID int, reviewerID string, vote int) e
 	return c.put(endpoint, body, nil)
 }
 
+// SetDraft publishes a draft pull request or puts a published one back into
+// draft.
+//
+// The body carries isDraft and nothing else. This endpoint updates whatever
+// fields it is given — title, description, target branch — so a struct with
+// any other field in it would quietly overwrite that field with its zero
+// value on every toggle.
+//
+// Whether the signed-in user may do this at all is Azure DevOps's call: it
+// depends on repository permissions boardwalk cannot see from here, so a
+// refusal comes back as the server's own message rather than a guess made
+// before asking.
+func (c *Client) SetDraft(repoID string, prID int, draft bool) error {
+	body := struct {
+		IsDraft bool `json:"isDraft"`
+	}{IsDraft: draft}
+
+	endpoint := fmt.Sprintf(
+		"%s/%s/%s/_apis/git/repositories/%s/pullRequests/%d?api-version=%s",
+		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project),
+		url.PathEscape(repoID), prID, APIVersion)
+	// Ordinary JSON, like thread status above and unlike a work item update.
+	return c.patch(endpoint, "application/json", body, nil)
+}
+
 // PullRequestURL is the browser URL for a pull request.
 func (c *Client) PullRequestURL(repo string, id int) string {
 	return fmt.Sprintf("%s/%s/%s/_git/%s/pullrequest/%d",
