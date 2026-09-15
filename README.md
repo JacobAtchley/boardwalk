@@ -357,11 +357,6 @@ what Azure DevOps does with it:
   **Worth smoke-testing one approve against a real pull request before relying
   on the vote keys** — it is the one of these that fails closest to something
   destructive.
-- Whether `PATCH .../pullRequests/{id}` accepts a body carrying only
-  `{"isDraft": …}`, and what Azure DevOps does either side of it. **Worth
-  smoke-testing one toggle on a pull request nobody is waiting on**: publishing
-  notifies every reviewer, and marking a published pull request back to draft
-  resets the votes already cast on it.
 - Whether a binary blob's `content` comes back raw or base64-encoded. If it is
   base64 the NUL-byte check never fires and a binary renders as base64 text
   rather than being declined. It carries no escape bytes either way, so the
