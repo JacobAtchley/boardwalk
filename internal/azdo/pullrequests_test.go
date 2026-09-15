@@ -380,7 +380,7 @@ func TestSetDraftPatchesThePullRequest(t *testing.T) {
 	if method != http.MethodPatch {
 		t.Errorf("method = %s, want PATCH", method)
 	}
-	if path != "/acme/Platform/_apis/git/repositories/r1/pullrequests/512" {
+	if path != "/acme/Platform/_apis/git/repositories/r1/pullRequests/512" {
 		t.Errorf("path = %q", path)
 	}
 	// Ordinary JSON, not the json-patch document a work item update needs.

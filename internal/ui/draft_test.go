@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/charmbracelet/bubbles/help"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -25,6 +26,36 @@ func TestDraftVerbReadsFromWhereThePullRequestIsNow(t *testing.T) {
 	}
 	if got := draftDone(false); got != "published" {
 		t.Errorf("draftDone(now published) = %q, want published", got)
+	}
+	// draftVerb is a phrase, not a stem: suffixing "ing" to it reads
+	// "mark drafting…" in one of the two directions, which is why the
+	// in-flight wording is its own function rather than built from the verb.
+	if got := draftDoing(true); got != "marking as a draft…" {
+		t.Errorf("draftDoing(now a draft) = %q, want marking as a draft…", got)
+	}
+	if got := draftDoing(false); got != "publishing…" {
+		t.Errorf("draftDoing(now published) = %q, want publishing…", got)
+	}
+}
+
+func TestDraftInFlightStatusReadsAsEnglishInBothDirections(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pr   azdo.PullRequest
+		want string
+	}{
+		{"published pull request", azdo.PullRequest{ID: 512, RepoID: "r1"}, "marking as a draft…"},
+		{"draft", azdo.PullRequest{ID: 512, RepoID: "r1", IsDraft: true}, "publishing…"},
+	} {
+		m := newPRDetail(t, nil)
+		m.pr = tc.pr
+		r := drive(t, m, 100, 60)
+		r.send(runes("P"))
+		r.send(runes("P"))
+
+		if status, _ := m.Status(); !strings.Contains(status, tc.want) {
+			t.Errorf("%s: status = %q, want %q", tc.name, status, tc.want)
+		}
 	}
 }
 
@@ -57,6 +88,95 @@ func TestDraftKeyArmsAndRequiresConfirmation(t *testing.T) {
 	status, isErr := m.Status()
 	if isErr || !strings.Contains(status, "press again to mark draft") {
 		t.Errorf("status = %q, isErr = %v, want it to say what the second press does", status, isErr)
+	}
+}
+
+func TestDraftKeyRefusesAPullRequestThatIsNoLongerOpen(t *testing.T) {
+	// The detail view is also reached from a work item's or a build's linked
+	// pull request, which is routinely one that has already merged. Azure
+	// DevOps would refuse the toggle, but it is refusing something boardwalk
+	// can already see — the same reason armVote checks for a reviewer id
+	// before arming rather than after the round trip.
+	for _, status := range []string{"completed", "abandoned"} {
+		m := newPRDetail(t, nil)
+		m.pr.Status = status
+		r := drive(t, m, 100, 60)
+
+		if cmd := r.send(runes("P")); cmd != nil {
+			t.Errorf("%s: P started work on a pull request that is not open", status)
+		}
+		if m.armedDraft != nil {
+			t.Errorf("%s: P armed the toggle on a pull request that is not open", status)
+		}
+		if got, _ := m.Status(); !strings.Contains(got, prStatusLabel(m.pr)) {
+			t.Errorf("%s: status = %q, want it to say why the toggle is refused", status, got)
+		}
+	}
+}
+
+func TestDraftKeyArmsOnAnActivePullRequestWhicheverWayTheStatusIsSpelled(t *testing.T) {
+	// The project-wide listing returns "active"; a single fetch of a pull
+	// request that has not been touched can leave it empty.
+	for _, status := range []string{"", "active"} {
+		m := newPRDetail(t, nil)
+		m.pr.Status = status
+		r := drive(t, m, 100, 60)
+		r.send(runes("P"))
+
+		if m.armedDraft == nil {
+			t.Errorf("status %q: P did not arm the toggle on an open pull request", status)
+		}
+	}
+}
+
+func TestDraftKeyIsNotOfferedOnAPullRequestThatIsNoLongerOpen(t *testing.T) {
+	m := newPRDetail(t, nil)
+	if !helpMentions(m.Keys(), "mark draft") {
+		t.Error("the help panel does not offer the toggle on an open pull request")
+	}
+
+	m.pr.Status = "completed"
+	if helpMentions(m.Keys(), "mark draft") || helpMentions(m.Keys(), "publish") {
+		t.Error("the help panel offers a toggle that would be refused")
+	}
+}
+
+// helpMentions reports whether any of a view's bindings describes itself as
+// desc, which is how the help panel would read to a user.
+func helpMentions(k help.KeyMap, desc string) bool {
+	for _, group := range k.FullHelp() {
+		for _, b := range group {
+			if b.Help().Desc == desc {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestDraftKeyAndTheVoteKeysCannotArmEachOther(t *testing.T) {
+	// Both are modal and both swallow what they do not recognise. Today that
+	// is asserted in a comment; this is the assertion.
+	m := newPRDetail(t, nil)
+	r := drive(t, m, 100, 60)
+
+	r.send(runes("A")) // arm a vote
+	r.send(runes("P"))
+	if m.armedDraft != nil {
+		t.Error("P armed the draft toggle underneath an armed vote")
+	}
+	if m.armedVote == nil {
+		t.Error("P cleared the armed vote instead of being swallowed")
+	}
+
+	r.send(tea.KeyMsg{Type: tea.KeyEsc})
+	r.send(runes("P")) // arm the toggle
+	r.send(runes("A"))
+	if m.armedVote != nil {
+		t.Error("A armed a vote underneath an armed draft toggle")
+	}
+	if m.armedDraft == nil {
+		t.Error("A cleared the armed toggle instead of being swallowed")
 	}
 }
 
@@ -230,6 +350,27 @@ func TestPullRequestsDraftTogglePublishesADraftRow(t *testing.T) {
 	}
 	if status, isErr := m.Status(); isErr || !strings.Contains(status, "published") {
 		t.Errorf("status = %q, isErr = %v, want the publish reported", status, isErr)
+	}
+}
+
+func TestPullRequestsDraftToggleSurvivesTheListReSortingUnderIt(t *testing.T) {
+	// Thread counts land as they are fetched and rebuild the rows each time.
+	// The arm captures the pull request it was made against, so a rebuild
+	// between the two presses cannot move the toggle onto a different row.
+	m := newPRs(t)
+	r := drive(t, m, 160, 20)
+	r.send(runes("P"))
+
+	r.send(threadsMsg{PR: 512, Threads: []azdo.Thread{
+		{Status: "active", Comments: []azdo.ThreadComment{{Author: "Other Dev", Text: "Why?"}}},
+	}})
+
+	armed := m.armedDraft
+	if armed == nil {
+		t.Fatal("a thread fetch landing between the presses disarmed the toggle")
+	}
+	if armed.prID != 512 || !armed.draft {
+		t.Errorf("armedDraft = %+v, want it still aimed at marking !512 a draft", armed)
 	}
 }
 

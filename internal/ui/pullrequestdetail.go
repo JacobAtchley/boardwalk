@@ -301,7 +301,7 @@ func (m *PullRequestDetail) handleArmedDraft(msg tea.KeyMsg) tea.Cmd {
 	case confirm:
 		armed := m.armedDraft
 		m.armedDraft = nil
-		m.status, m.failed = draftVerb(!armed.draft)+"ing…", false
+		m.status, m.failed = draftDoing(armed.draft), false
 		return setDraftCmd(m.client, armed.repoID, armed.prID, armed.draft)
 	}
 	return nil
@@ -525,7 +525,7 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 			}
 			m.status, m.failed = "resolving…", false
 			return m, m.resolveCmd(t.ID)
-		case key.Matches(msg, keyDraft):
+		case key.Matches(msg, keyDraftToggle):
 			m.armedDraft, m.status = armDraft(m.pr)
 			m.failed = false
 			return m, nil
@@ -711,11 +711,16 @@ func (m *PullRequestDetail) Title() string {
 // component rather than trusting a character count.
 func (m *PullRequestDetail) Keys() help.KeyMap {
 	short := []key.Binding{keyDiff, keyLinkedItem, keyReply, keyResolve}
-	// The draft toggle is in the panel rather than on the footer, and labelled
-	// for the pull request it is looking at: "publish" on a draft, "mark
-	// draft" on a published one.
-	full := []key.Binding{keyDiff, keyLinkedItem, keyReply, keyResolve,
-		draftBinding(m.pr.IsDraft), keyApprove, keyWait, keyReject, keyTop, keyBottom, keyRefresh}
+	// The draft toggle is in the panel rather than on the footer, labelled for
+	// the pull request it is looking at — "publish" on a draft, "mark draft"
+	// on a published one — and absent altogether on a merged or abandoned one,
+	// which this view reaches through a work item's or a build's link. Offering
+	// a key that would only be refused is worse than not offering it.
+	full := []key.Binding{keyDiff, keyLinkedItem, keyReply, keyResolve}
+	if draftable(m.pr) {
+		full = append(full, draftBinding(m.pr.IsDraft))
+	}
+	full = append(full, keyApprove, keyWait, keyReject, keyTop, keyBottom, keyRefresh)
 	return keyMap{
 		short:  append(append([]key.Binding{}, short...), keyBack, keyHelp),
 		groups: [][]key.Binding{full, {keyCopyID, keySlack, keyOpen}, navBindings()},

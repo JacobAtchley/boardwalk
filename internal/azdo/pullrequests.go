@@ -390,7 +390,7 @@ func (c *Client) SetDraft(repoID string, prID int, draft bool) error {
 	}{IsDraft: draft}
 
 	endpoint := fmt.Sprintf(
-		"%s/%s/%s/_apis/git/repositories/%s/pullrequests/%d?api-version=%s",
+		"%s/%s/%s/_apis/git/repositories/%s/pullRequests/%d?api-version=%s",
 		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project),
 		url.PathEscape(repoID), prID, APIVersion)
 	// Ordinary JSON, like thread status above and unlike a work item update.

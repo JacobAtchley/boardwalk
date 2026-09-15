@@ -38,11 +38,17 @@ knows what it is running on, and they shell out to whatever the platform has:
 |---|---|---|
 | macOS | `pbcopy` | `open` |
 | Windows | `clip.exe` | `rundll32 url.dll,FileProtocolHandler` |
-| Linux and the rest | `wl-copy`, `xclip` or `xsel` — whichever is installed | `xdg-open` |
+| Linux and the rest | `wl-copy`, `xclip` or `xsel` | `xdg-open` |
+| WSL | the above, then `clip.exe` | `wslview`, then `xdg-open` |
 
 Nothing else is platform-specific. When none of the candidates is on `PATH` the
 status line names the ones it looked for, rather than claiming the copy
 happened.
+
+On Linux the order is read off the session rather than fixed: `wl-copy` is
+first under Wayland and last under X11, since being installed is not the same
+as working — `wl-copy` on an X11 desktop fails on a machine where `xclip`
+copies fine.
 
 ## Setup
 
@@ -175,9 +181,10 @@ listed newest first.
 `P` asks before it acts: the first press arms the toggle and says what the
 second one will do, `esc` cancels. Publishing notifies every reviewer on the
 pull request, which is not something a mistyped key should be able to do. It
-works from the list and from the pull request itself, and whether you are
-allowed to is Azure DevOps's call — a refusal comes back on the status line in
-its own words.
+works from the list and from the pull request itself. A merged or abandoned
+pull request cannot be toggled at all, so the key is neither offered nor armed
+on one; whether *you* may toggle an open one is Azure DevOps's call, and a
+refusal comes back on the status line in its own words.
 
 The side pane is a summary. `enter` opens the pull request itself: the
 description, every reviewer's vote, the work items it is linked to, and every
@@ -309,9 +316,10 @@ Known rough edges, none of them load-bearing:
 - Straight after assigning an item to yourself the row shows your email rather
   than your name. `az account show` does not report a display name, so that is
   the best available until the next fetch replaces it.
-- `stateSetMsg` and `assigneeSetMsg` report success without checking the row is
-  still listed. The row sync itself is keyed by id and safely does nothing, but
-  the status line can claim a change to something no longer on screen.
+- `stateSetMsg`, `assigneeSetMsg` and `draftSetMsg` report success without
+  checking the row is still listed. The row sync itself is keyed by id and
+  safely does nothing, but the status line can claim a change to something no
+  longer on screen.
 - The pull request list hands its cached threads to the detail view, which
   writes to them in place. Resolving a thread and reopening the pull request
   shows it resolved while the list row's own counts still say otherwise.
@@ -324,9 +332,11 @@ Internal cleanups, invisible from outside but worth doing:
 
 - The three single-line prompts — branch name, pull request reply, work item
   comment — are near-identical, and more to the point the rule that every modal
-  must be reported by `Prompting()` is currently kept by hand in six places.
-  Extracting one prompt type would make that rule structural instead of
-  remembered.
+  must be reported by `Prompting()` is currently kept by hand in each of the six
+  views, which between them now have eight modal states: three prompts, the
+  fuzzy filter, an armed vote and an armed draft toggle in two views. Extracting
+  one prompt type, and one armed-confirm type, would make that rule structural
+  instead of remembered.
 - `SharedAction` runs before a view's own key switch in the list views and after
   it in the item and pull request detail views. Nothing collides today, which is
   luck rather than design.
@@ -347,6 +357,11 @@ what Azure DevOps does with it:
   **Worth smoke-testing one approve against a real pull request before relying
   on the vote keys** — it is the one of these that fails closest to something
   destructive.
+- Whether `PATCH .../pullRequests/{id}` accepts a body carrying only
+  `{"isDraft": …}`, and what Azure DevOps does either side of it. **Worth
+  smoke-testing one toggle on a pull request nobody is waiting on**: publishing
+  notifies every reviewer, and marking a published pull request back to draft
+  resets the votes already cast on it.
 - Whether a binary blob's `content` comes back raw or base64-encoded. If it is
   base64 the NUL-byte check never fires and a binary renders as base64 text
   rather than being declined. It carries no escape bytes either way, so the

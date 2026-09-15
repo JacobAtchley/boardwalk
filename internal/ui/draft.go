@@ -27,6 +27,16 @@ func draftVerb(isDraft bool) string {
 	return "mark draft"
 }
 
+// draftDoing is the action while it is in flight. It is spelled out rather
+// than built from draftVerb, which is a phrase and not a stem: "publish" plus
+// "ing" is lucky, and "mark draft" plus "ing" is "mark drafting".
+func draftDoing(nowDraft bool) string {
+	if nowDraft {
+		return "marking as a draft…"
+	}
+	return "publishing…"
+}
+
 // draftDone is the same action once it has happened, for the status line.
 func draftDone(nowDraft bool) string {
 	if nowDraft {
@@ -40,7 +50,7 @@ func draftDone(nowDraft bool) string {
 // "publish" on a draft and "mark draft" on a published pull request costs
 // nothing and saves the reader guessing which direction the key goes.
 func draftBinding(isDraft bool) key.Binding {
-	b := keyDraft
+	b := keyDraftToggle
 	b.SetHelp("P", draftVerb(isDraft))
 	return b
 }
@@ -73,9 +83,28 @@ type armedDraft struct {
 	draft bool
 }
 
+// draftable reports whether pr is one the toggle applies to at all. A merged
+// or abandoned pull request is not: Azure DevOps refuses to change its draft
+// flag, and this is a refusal boardwalk can already see coming — permissions
+// are the part it cannot, and those it leaves to the server. armVote sets the
+// precedent for checking what is knowable before arming, since a check that
+// only happens at the network call hides the real reason behind an error code.
+//
+// It matters because the detail view is not only reached from the list of
+// active pull requests: a work item and a build both open the pull request
+// they are linked to, and those have routinely already merged.
+func draftable(pr azdo.PullRequest) bool {
+	return pr.Status == "" || pr.Status == "active"
+}
+
 // armDraft describes the toggle pr's current state calls for, with the status
-// line text that says what a second press will do.
+// line text that says what a second press will do — or nothing to arm and the
+// reason, when pr is not one the toggle applies to.
 func armDraft(pr azdo.PullRequest) (*armedDraft, string) {
+	if !draftable(pr) {
+		return nil, fmt.Sprintf("!%d is %s — only an open pull request can be %s",
+			pr.ID, prStatusLabel(pr), draftDone(!pr.IsDraft))
+	}
 	return &armedDraft{repoID: pr.RepoID, prID: pr.ID, draft: !pr.IsDraft},
 		fmt.Sprintf("press again to %s !%d — esc cancels", draftVerb(pr.IsDraft), pr.ID)
 }
@@ -88,7 +117,7 @@ func resolveDraftKey(msg tea.KeyMsg) (confirm, cancel bool) {
 	switch {
 	case key.Matches(msg, keyBack):
 		return false, true
-	case key.Matches(msg, keyDraft):
+	case key.Matches(msg, keyDraftToggle):
 		return true, false
 	default:
 		return false, false

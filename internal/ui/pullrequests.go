@@ -318,7 +318,7 @@ func (m *PullRequests) Update(msg tea.Msg) (View, tea.Cmd) {
 			case confirm:
 				armed := m.armedDraft
 				m.armedDraft = nil
-				m.status, m.failed = draftVerb(!armed.draft)+"ing…", false
+				m.status, m.failed = draftDoing(armed.draft), false
 				return m, setDraftCmd(m.client, armed.repoID, armed.prID, armed.draft)
 			}
 			return m, nil
@@ -331,8 +331,11 @@ func (m *PullRequests) Update(msg tea.Msg) (View, tea.Cmd) {
 			}
 		}
 
-		switch msg.String() {
-		case "P":
+		// Matched against the binding rather than by letter, unlike the cases
+		// below: this is the one key here that is also matched elsewhere —
+		// resolveDraftKey reads it to confirm — and the two must not be able
+		// to disagree about which key that is.
+		if key.Matches(msg, keyDraftToggle) {
 			row, ok := m.browser.Selected()
 			if !ok {
 				return m, nil
@@ -344,6 +347,9 @@ func (m *PullRequests) Update(msg tea.Msg) (View, tea.Cmd) {
 			m.armedDraft, m.status = armDraft(r.PullRequest)
 			m.failed = false
 			return m, nil
+		}
+
+		switch msg.String() {
 		case "d":
 			m.drafts = (m.drafts + 1) % 3
 			m.applyFilters()
@@ -480,7 +486,7 @@ func (m *PullRequests) Keys() help.KeyMap {
 	// The draft toggle is labelled for the row under the cursor, so the panel
 	// reads "publish" on a draft and "mark draft" on a published one rather
 	// than making the reader work out which way the key goes.
-	toggle := keyDraft
+	toggle := keyDraftToggle
 	if row, ok := m.browser.Selected(); ok {
 		if r, ok := row.(prRow); ok {
 			toggle = draftBinding(r.IsDraft)
