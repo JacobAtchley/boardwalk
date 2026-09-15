@@ -51,6 +51,14 @@ var (
 	// the pane it opens is the sort of thing nobody remembers.
 	keyDiff = key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "diff"))
 
+	// keyDraft toggles a pull request between draft and published. P rather
+	// than a lowercase letter because d is the draft filter and D the diff,
+	// and because it is the only key here that changes what other people get
+	// told: publishing notifies every reviewer. Its help text is built per
+	// pull request by draftBinding, which is what the views actually show —
+	// this is the binding the keypress is matched against.
+	keyDraft = key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "publish / mark draft"))
+
 	keyApprove = key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "approve"))
 	keyWait    = key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "wait for author"))
 	keyReject  = key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "reject"))

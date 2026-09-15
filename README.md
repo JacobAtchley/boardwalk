@@ -31,9 +31,18 @@ make install          # builds and drops the binary in ~/.local/bin
 Requires Go 1.27+, the [Azure CLI](https://learn.microsoft.com/cli/azure/), and
 a current `az login`.
 
-**macOS for now.** The copy and open actions shell out to `pbcopy` and `open`;
-nothing else is platform-specific. On a machine without them the status line
-says so rather than claiming the copy happened.
+**macOS, Windows and Linux.** The copy and open actions are the only part that
+knows what it is running on, and they shell out to whatever the platform has:
+
+| | copy | open |
+|---|---|---|
+| macOS | `pbcopy` | `open` |
+| Windows | `clip.exe` | `rundll32 url.dll,FileProtocolHandler` |
+| Linux and the rest | `wl-copy`, `xclip` or `xsel` — whichever is installed | `xdg-open` |
+
+Nothing else is platform-specific. When none of the candidates is on `PATH` the
+status line names the ones it looked for, rather than claiming the copy
+happened.
 
 ## Setup
 
@@ -160,7 +169,15 @@ listed newest first.
 | `enter` | open the full pull request |
 | `v` | only pull requests waiting on your review |
 | `d` | cycle drafts hidden → drafts only → all |
+| `P` | publish a draft, or put a published pull request back into draft |
 | `^t` | toggle between this repository and the whole project |
+
+`P` asks before it acts: the first press arms the toggle and says what the
+second one will do, `esc` cancels. Publishing notifies every reviewer on the
+pull request, which is not something a mistyped key should be able to do. It
+works from the list and from the pull request itself, and whether you are
+allowed to is Azure DevOps's call — a refusal comes back on the status line in
+its own words.
 
 The side pane is a summary. `enter` opens the pull request itself: the
 description, every reviewer's vote, the work items it is linked to, and every
@@ -230,8 +247,8 @@ were in the middle of.
 
 The command is copied as soon as the branch exists on the server, even if the
 state change or the link then fails, since the branch is there either way. If
-`pbcopy` is missing or refuses, the command goes on the status line to be read
-off instead.
+the clipboard command is missing or refuses, the command goes on the status
+line to be read off instead.
 
 ## Notes from building it
 
