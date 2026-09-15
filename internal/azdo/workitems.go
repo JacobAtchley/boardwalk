@@ -157,8 +157,8 @@ func (c *Client) batch(ids []int) ([]WorkItem, error) {
 		} `json:"value"`
 	}
 
-	endpoint := fmt.Sprintf("%s/%s/_apis/wit/workitemsbatch?api-version=%s",
-		c.root(), url.PathEscape(c.Org), APIVersion)
+	endpoint := fmt.Sprintf("%s/%s/%s/_apis/wit/workitemsbatch?api-version=%s",
+		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project), APIVersion)
 	if err := c.post(endpoint, body, &resp); err != nil {
 		return nil, err
 	}
