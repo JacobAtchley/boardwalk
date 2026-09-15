@@ -39,7 +39,7 @@ knows what it is running on, and they shell out to whatever the platform has:
 | macOS | `pbcopy` | `open` |
 | Windows | `clip.exe` | `rundll32 url.dll,FileProtocolHandler` |
 | Linux and the rest | `wl-copy`, `xclip` or `xsel` | `xdg-open` |
-| WSL | the above, then `clip.exe` | `wslview`, then `xdg-open` |
+| WSL | `clip.exe` — behind the Linux tools when there is a display | `wslview`, then `xdg-open` |
 
 Nothing else is platform-specific. When none of the candidates is on `PATH` the
 status line names the ones it looked for, rather than claiming the copy
@@ -333,10 +333,10 @@ Internal cleanups, invisible from outside but worth doing:
 - The three single-line prompts — branch name, pull request reply, work item
   comment — are near-identical, and more to the point the rule that every modal
   must be reported by `Prompting()` is currently kept by hand in each of the six
-  views, which between them now have eight modal states: three prompts, the
-  fuzzy filter, an armed vote and an armed draft toggle in two views. Extracting
-  one prompt type, and one armed-confirm type, would make that rule structural
-  instead of remembered.
+  views, which between them now carry seven kinds of modal state: the three
+  prompts, the fuzzy filter, the state picker, an armed vote and an armed draft
+  toggle. Extracting one prompt type, and one armed-confirm type, would make
+  that rule structural instead of remembered.
 - `SharedAction` runs before a view's own key switch in the list views and after
   it in the item and pull request detail views. Nothing collides today, which is
   luck rather than design.

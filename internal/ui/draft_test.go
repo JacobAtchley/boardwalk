@@ -97,19 +97,38 @@ func TestDraftKeyRefusesAPullRequestThatIsNoLongerOpen(t *testing.T) {
 	// DevOps would refuse the toggle, but it is refusing something boardwalk
 	// can already see — the same reason armVote checks for a reviewer id
 	// before arming rather than after the round trip.
-	for _, status := range []string{"completed", "abandoned"} {
+	for _, tc := range []struct {
+		status string
+		draft  bool
+		want   string
+	}{
+		{"completed", false, "merged"},
+		{"abandoned", false, "abandoned"},
+		// An abandoned draft is the case that catches naming the state with
+		// prStatusLabel, which answers "draft" first and would have this
+		// message give the opposite of the reason.
+		{"abandoned", true, "abandoned"},
+		{"completed", true, "merged"},
+	} {
 		m := newPRDetail(t, nil)
-		m.pr.Status = status
+		m.pr.Status, m.pr.IsDraft = tc.status, tc.draft
 		r := drive(t, m, 100, 60)
 
 		if cmd := r.send(runes("P")); cmd != nil {
-			t.Errorf("%s: P started work on a pull request that is not open", status)
+			t.Errorf("%s: P started work on a pull request that is not open", tc.status)
 		}
 		if m.armedDraft != nil {
-			t.Errorf("%s: P armed the toggle on a pull request that is not open", status)
+			t.Errorf("%s: P armed the toggle on a pull request that is not open", tc.status)
 		}
-		if got, _ := m.Status(); !strings.Contains(got, prStatusLabel(m.pr)) {
-			t.Errorf("%s: status = %q, want it to say why the toggle is refused", status, got)
+		got, isErr := m.Status()
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("status = %q, want it to say the pull request is %s", got, tc.want)
+		}
+		if !isErr {
+			// armVote reports its own refusal as an error, and this is the
+			// same kind of answer: the key did nothing and the user needs to
+			// see that rather than read past it.
+			t.Errorf("status = %q was not reported as a refusal", got)
 		}
 	}
 }
@@ -358,25 +377,40 @@ func TestPullRequestsDraftToggleSurvivesTheListReSortingUnderIt(t *testing.T) {
 	// The arm captures the pull request it was made against, so a rebuild
 	// between the two presses cannot move the toggle onto a different row.
 	m := newPRs(t)
+	// Drafts only, so the list is the one draft in the fixture and the cursor
+	// is on it.
+	updated, _ := m.Update(runes("d"))
+	m = updated.(*PullRequests)
 	r := drive(t, m, 160, 20)
-	r.send(runes("P"))
+	r.send(runes("P")) // arm: publish !511
 
-	r.send(threadsMsg{PR: 512, Threads: []azdo.Thread{
-		{Status: "active", Comments: []azdo.ThreadComment{{Author: "Other Dev", Text: "Why?"}}},
-	}})
+	// !511 is published from somewhere else — a second boardwalk, the web UI —
+	// and the row drops out of a drafts-only list, leaving nothing selected.
+	r.send(draftSetMsg{PR: 511, Draft: false})
+	if _, ok := m.browser.Selected(); ok {
+		t.Fatal("the armed row is still selected, so this proves nothing")
+	}
 
 	armed := m.armedDraft
 	if armed == nil {
-		t.Fatal("a thread fetch landing between the presses disarmed the toggle")
+		t.Fatal("the row leaving the list disarmed the toggle")
 	}
-	if armed.prID != 512 || !armed.draft {
-		t.Errorf("armedDraft = %+v, want it still aimed at marking !512 a draft", armed)
+	if armed.prID != 511 {
+		t.Errorf("armedDraft = %+v, want it still aimed at !511", armed)
+	}
+	// The confirming press fires against the pull request the user armed it
+	// on, which is the whole reason the arm captures it rather than reading
+	// the cursor again when the second press arrives.
+	if cmd := r.send(runes("P")); cmd == nil {
+		t.Fatal("the confirming press did not fire once the row had left the list")
 	}
 }
 
 func TestPullRequestsDraftToggleWithNoRowSelected(t *testing.T) {
-	// An empty list has nothing under the cursor; pressing P must say so
-	// rather than arming a toggle against a pull request that is not there.
+	// An empty list has nothing under the cursor, so P does nothing at all —
+	// no arm, no command. It says nothing either: the view is already showing
+	// its own empty state, which explains the absence better than a status
+	// line answering a key the user pressed into an empty screen.
 	m := NewPullRequests(&azdo.Client{Org: "acme", Project: "Platform"}, nil)
 	m.repoOnly = false
 	updated, _ := m.Update(prsMsg{PRs: nil})

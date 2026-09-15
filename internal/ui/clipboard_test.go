@@ -53,11 +53,14 @@ func TestClipboardCandidatesPerPlatform(t *testing.T) {
 		{"X11", "linux", noEnv, x11},
 		{"Wayland", "linux", envWith(map[string]string{"WAYLAND_DISPLAY": "wayland-0"}), wayland},
 		{"other Unix", "freebsd", noEnv, x11},
-		// Under WSL the Linux clipboard tools are usually absent and the
-		// Windows one is on PATH, so it goes last rather than first: WSLg
-		// sessions do have a working wl-copy.
-		{"WSL", "linux", envWith(map[string]string{"WSL_DISTRO_NAME": "Ubuntu"}),
+		// Under WSLg there is a real display, so the Linux tools come first
+		// and the Windows one is the fallback behind them.
+		{"WSLg", "linux", envWith(map[string]string{"WSL_DISTRO_NAME": "Ubuntu", "DISPLAY": ":0"}),
 			append(append([][]string{}, x11...), []string{"clip.exe"})},
+		// Without one, every Linux tool would fail the way wl-copy fails under
+		// X11 — "can't open display" — so clip.exe leads instead.
+		{"WSL with no display", "linux", envWith(map[string]string{"WSL_DISTRO_NAME": "Ubuntu"}),
+			append([][]string{{"clip.exe"}}, x11...)},
 	} {
 		got := clipboardCandidates(tc.goos, tc.env)
 		if !sameCommands(got, tc.want) {
@@ -89,6 +92,46 @@ func TestBrowserCandidatesPerPlatform(t *testing.T) {
 		if !sameCommands(got, tc.want) {
 			t.Errorf("%s: browserCandidates(%q) = %v, want %v", tc.name, tc.goos, got, tc.want)
 		}
+	}
+}
+
+func TestClipboardInputIsUTF16ForClipExe(t *testing.T) {
+	// clip.exe decodes its stdin with the console code page unless the bytes
+	// start with a UTF-16LE byte order mark, so a Slack link for a title
+	// carrying an en dash — which is most of them — arrives mangled, and
+	// silently: the status line still says the copy happened.
+	got := clipboardInput("clip.exe", "a–b")
+	want := "\xff\xfe" + "a\x00" + "\x13\x20" + "b\x00"
+	if got != want {
+		t.Errorf("clipboardInput for clip.exe = %q, want %q", got, want)
+	}
+}
+
+func TestClipboardInputIsLeftAloneForEveryOtherCommand(t *testing.T) {
+	// The Unix tools take UTF-8 and would render the BOM as a character.
+	for _, name := range []string{"pbcopy", "wl-copy", "xclip", "xsel"} {
+		if got := clipboardInput(name, "a–b"); got != "a–b" {
+			t.Errorf("clipboardInput for %s = %q, want the text unchanged", name, got)
+		}
+	}
+}
+
+func TestStartFirstAvailableDoesNotWaitForTheCommand(t *testing.T) {
+	// Opening a browser must not block the interface for as long as the
+	// browser lives, so this returns as soon as the process is started. The
+	// wait still happens, on its own goroutine, or the child is never reaped.
+	if err := startFirstAvailable([][]string{
+		{"boardwalk-no-such-command"},
+		exitCommand(0),
+	}); err != nil {
+		t.Errorf("starting the first available command failed: %v", err)
+	}
+}
+
+func TestStartFirstAvailableReportsWhatIsMissing(t *testing.T) {
+	err := startFirstAvailable([][]string{{"boardwalk-no-such-command"}})
+	if err == nil || !strings.Contains(err.Error(), "boardwalk-no-such-command") {
+		t.Errorf("error = %v, want the missing command named", err)
 	}
 }
 

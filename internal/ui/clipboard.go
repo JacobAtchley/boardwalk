@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode/utf16"
 )
 
 // The copy and open actions are the only part of boardwalk that has to know
@@ -49,14 +51,22 @@ func clipboardCandidates(goos string, env func(string) string) [][]string {
 			{"xclip", "-selection", "clipboard"},
 			{"xsel", "--clipboard", "--input"},
 		}
-		list := append([][]string{{"wl-copy"}}, x11...)
-		if env("WAYLAND_DISPLAY") == "" {
+		var list [][]string
+		if env("WAYLAND_DISPLAY") != "" {
+			list = append([][]string{{"wl-copy"}}, x11...)
+		} else {
 			list = append(x11, []string{"wl-copy"})
 		}
 		if wsl(env) {
-			// Last, not first: a WSLg session has a working wl-copy, and the
-			// Windows clipboard is the fallback for the sessions that do not.
-			list = append(list, []string{"clip.exe"})
+			// Behind the Linux tools when there is a display to reach — a WSLg
+			// session has a working wl-copy — and ahead of them when there is
+			// not, since without one they all fail the way wl-copy fails under
+			// X11, with a complaint the user can do nothing about.
+			if env("WAYLAND_DISPLAY") == "" && env("DISPLAY") == "" {
+				list = append([][]string{{"clip.exe"}}, list...)
+			} else {
+				list = append(list, []string{"clip.exe"})
+			}
 		}
 		return list
 	}
@@ -80,6 +90,26 @@ func browserCandidates(goos, url string, env func(string) string) [][]string {
 		}
 		return [][]string{{"xdg-open", url}}
 	}
+}
+
+// clipboardInput is what to feed the chosen clipboard command.
+//
+// Every one of them takes UTF-8 except clip.exe, which decodes its input with
+// the console code page — so an en dash in a pull request title, which Azure
+// DevOps titles are full of, lands on a Windows clipboard as mojibake while
+// the status line says the copy succeeded. A UTF-16LE byte order mark at the
+// front is what tells clip.exe otherwise.
+func clipboardInput(command, s string) string {
+	if command != "clip.exe" {
+		return s
+	}
+	var b strings.Builder
+	b.WriteString("\xff\xfe") // UTF-16LE byte order mark
+	for _, unit := range utf16.Encode([]rune(s)) {
+		b.WriteByte(byte(unit))
+		b.WriteByte(byte(unit >> 8))
+	}
+	return b.String()
 }
 
 // lookup finds the first candidate that is on PATH. It returns the candidates'
@@ -111,7 +141,7 @@ func runFirstAvailable(candidates [][]string, stdin string) error {
 	}
 	// Always a reader, even an empty one: pbcopy with no stdin attached reads
 	// the terminal boardwalk is drawing on, and hangs.
-	cmd.Stdin = strings.NewReader(stdin)
+	cmd.Stdin = strings.NewReader(clipboardInput(filepath.Base(cmd.Path), stdin))
 	return cmd.Run()
 }
 

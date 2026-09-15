@@ -527,7 +527,9 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 			return m, m.resolveCmd(t.ID)
 		case key.Matches(msg, keyDraftToggle):
 			m.armedDraft, m.status = armDraft(m.pr)
-			m.failed = false
+			// A refusal is reported as one: the key did nothing, and an
+			// ordinary-looking status line reads as though it had.
+			m.failed = m.armedDraft == nil
 			return m, nil
 		case key.Matches(msg, keyApprove), key.Matches(msg, keyWait), key.Matches(msg, keyReject):
 			vote, label, _ := matchVoteBinding(msg)

@@ -51,7 +51,10 @@ func draftDone(nowDraft bool) string {
 // nothing and saves the reader guessing which direction the key goes.
 func draftBinding(isDraft bool) key.Binding {
 	b := keyDraftToggle
-	b.SetHelp("P", draftVerb(isDraft))
+	// The key is read off the binding rather than spelled again here, for the
+	// same reason the list view matches on the binding: two places naming the
+	// same key can disagree, and the help panel is where that would show.
+	b.SetHelp(keyDraftToggle.Help().Key, draftVerb(isDraft))
 	return b
 }
 
@@ -102,8 +105,17 @@ func draftable(pr azdo.PullRequest) bool {
 // reason, when pr is not one the toggle applies to.
 func armDraft(pr azdo.PullRequest) (*armedDraft, string) {
 	if !draftable(pr) {
+		// The raw status rather than prStatusLabel, which answers "draft"
+		// before it looks at the status at all: an abandoned draft would then
+		// be refused with "!512 is draft", which is the opposite of the
+		// reason, and a draft is exactly what a linked pull request left
+		// abandoned tends to be.
+		state := pr.Status
+		if state == "completed" {
+			state = "merged"
+		}
 		return nil, fmt.Sprintf("!%d is %s — only an open pull request can be %s",
-			pr.ID, prStatusLabel(pr), draftDone(!pr.IsDraft))
+			pr.ID, state, draftDone(!pr.IsDraft))
 	}
 	return &armedDraft{repoID: pr.RepoID, prID: pr.ID, draft: !pr.IsDraft},
 		fmt.Sprintf("press again to %s !%d — esc cancels", draftVerb(pr.IsDraft), pr.ID)

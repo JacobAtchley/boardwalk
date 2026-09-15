@@ -345,7 +345,9 @@ func (m *PullRequests) Update(msg tea.Msg) (View, tea.Cmd) {
 				return m, nil
 			}
 			m.armedDraft, m.status = armDraft(r.PullRequest)
-			m.failed = false
+			// A refusal is reported as one: the key did nothing, and an
+			// ordinary-looking status line reads as though it had.
+			m.failed = m.armedDraft == nil
 			return m, nil
 		}
 
@@ -485,7 +487,9 @@ func (m *PullRequests) Keys() help.KeyMap {
 	short := []key.Binding{keyPullRequest, keyDrafts, keyScope}
 	// The draft toggle is labelled for the row under the cursor, so the panel
 	// reads "publish" on a draft and "mark draft" on a published one rather
-	// than making the reader work out which way the key goes.
+	// than making the reader work out which way the key goes. No draftable
+	// check here, unlike the detail view: this list asks for active pull
+	// requests and holds nothing else.
 	toggle := keyDraftToggle
 	if row, ok := m.browser.Selected(); ok {
 		if r, ok := row.(prRow); ok {
