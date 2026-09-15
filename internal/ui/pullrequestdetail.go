@@ -132,6 +132,12 @@ type PullRequestDetail struct {
 	// swallows every key before this view's own bindings are even
 	// considered, so there is nothing left to arm a vote while it is open.
 	armedVote *pendingVote
+
+	// armedDraft is the same arrangement for the draft toggle, and for the
+	// same reason — see draft.go. No two of the three modal states can be
+	// open at once: each of them swallows every key that is not its own
+	// confirm or cancel, so none can be reached while another is up.
+	armedDraft *armedDraft
 }
 
 // NewPullRequestDetail builds the view. threads is whatever the list had
@@ -284,6 +290,23 @@ func (m *PullRequestDetail) handleArmedVote(msg tea.KeyMsg) tea.Cmd {
 	return m.voteCmd(id, vote)
 }
 
+// handleArmedDraft resolves a keypress while the draft toggle is armed: esc
+// cancels, a second P fires it, and anything else is swallowed.
+func (m *PullRequestDetail) handleArmedDraft(msg tea.KeyMsg) tea.Cmd {
+	confirm, cancel := resolveDraftKey(msg)
+	switch {
+	case cancel:
+		m.armedDraft = nil
+		m.status, m.failed = "", false
+	case confirm:
+		armed := m.armedDraft
+		m.armedDraft = nil
+		m.status, m.failed = draftDoing(armed.draft), false
+		return setDraftCmd(m.client, armed.repoID, armed.prID, armed.draft)
+	}
+	return nil
+}
+
 // updateReviewerVote rewrites the cached reviewer's vote in place, the same
 // cache-over-refetch approach updateThread takes below: the vote this view
 // just sent is already known without asking the server again.
@@ -390,6 +413,19 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.invalidate()
 		return m, nil
 
+	case draftSetMsg:
+		if msg.PR != m.pr.ID {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.status, m.failed = msg.Err.Error(), true
+			return m, nil
+		}
+		m.pr.IsDraft = msg.Draft
+		m.status, m.failed = fmt.Sprintf("!%d %s", m.pr.ID, draftDone(msg.Draft)), false
+		m.invalidate()
+		return m, nil
+
 	case StatusMsg:
 		m.status = msg.Text
 		return m, nil
@@ -425,6 +461,12 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 		// be read as something else instead.
 		if m.armedVote != nil {
 			return m, m.handleArmedVote(msg)
+		}
+
+		// The draft toggle arms the same way, and takes every key while it is
+		// up for the same reason.
+		if m.armedDraft != nil {
+			return m, m.handleArmedDraft(msg)
 		}
 
 		switch {
@@ -483,6 +525,12 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 			}
 			m.status, m.failed = "resolving…", false
 			return m, m.resolveCmd(t.ID)
+		case key.Matches(msg, keyDraftToggle):
+			m.armedDraft, m.status = armDraft(m.pr)
+			// A refusal is reported as one: the key did nothing, and an
+			// ordinary-looking status line reads as though it had.
+			m.failed = m.armedDraft == nil
+			return m, nil
 		case key.Matches(msg, keyApprove), key.Matches(msg, keyWait), key.Matches(msg, keyReject):
 			vote, label, _ := matchVoteBinding(msg)
 			m.armVote(vote, label)
@@ -665,7 +713,16 @@ func (m *PullRequestDetail) Title() string {
 // component rather than trusting a character count.
 func (m *PullRequestDetail) Keys() help.KeyMap {
 	short := []key.Binding{keyDiff, keyLinkedItem, keyReply, keyResolve}
-	full := []key.Binding{keyDiff, keyLinkedItem, keyReply, keyResolve, keyApprove, keyWait, keyReject, keyTop, keyBottom, keyRefresh}
+	// The draft toggle is in the panel rather than on the footer, labelled for
+	// the pull request it is looking at — "publish" on a draft, "mark draft"
+	// on a published one — and absent altogether on a merged or abandoned one,
+	// which this view reaches through a work item's or a build's link. Offering
+	// a key that would only be refused is worse than not offering it.
+	full := []key.Binding{keyDiff, keyLinkedItem, keyReply, keyResolve}
+	if draftable(m.pr) {
+		full = append(full, draftBinding(m.pr.IsDraft))
+	}
+	full = append(full, keyApprove, keyWait, keyReject, keyTop, keyBottom, keyRefresh)
 	return keyMap{
 		short:  append(append([]key.Binding{}, short...), keyBack, keyHelp),
 		groups: [][]key.Binding{full, {keyCopyID, keySlack, keyOpen}, navBindings()},
@@ -681,11 +738,11 @@ func (m *PullRequestDetail) Status() (string, bool) {
 	return m.work.View() + m.status, m.failed
 }
 
-// Prompting reports whether the reply prompt or an armed vote is open, so
-// Root leaves esc and q to this view rather than treating them as navigation
-// or quit — esc has to cancel the arm, not pop the whole pane.
+// Prompting reports whether the reply prompt or one of the two arms is open,
+// so Root leaves esc and q to this view rather than treating them as
+// navigation or quit — esc has to cancel the arm, not pop the whole pane.
 func (m *PullRequestDetail) Prompting() bool {
-	return m.replyPrompt != nil || m.armedVote != nil
+	return m.replyPrompt != nil || m.armedVote != nil || m.armedDraft != nil
 }
 
 // prDetailRow adapts the pull request to the shared copy and open actions, so

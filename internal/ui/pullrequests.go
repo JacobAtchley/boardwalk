@@ -117,6 +117,13 @@ type PullRequests struct {
 	repo     string // the working directory's repository, if it is one
 	repoOnly bool
 
+	// armedDraft is non-nil while a draft toggle is waiting on its confirming
+	// keystroke. While it is set this view's other keys are swallowed: see
+	// draft.go for why the toggle confirms at all, and the filter test in
+	// draft_test.go for why d in particular must not get through — cycling the
+	// filter would re-sort the list under a toggle armed on one of its rows.
+	armedDraft *armedDraft
+
 	// reviewGroups are the teams and security groups the user belongs to, from
 	// the config file. A pull request can name a group as its reviewer instead
 	// of a person, and the payload does not say who is in it.
@@ -182,6 +189,18 @@ func (m *PullRequests) visible() []azdo.PullRequest {
 		out = append(out, pr)
 	}
 	return out
+}
+
+// setDraft rewrites the fetched pull request in place, so the row badge and
+// the draft filter both read the new state without a refetch — the answer is
+// already known: it is what was just sent and accepted.
+func (m *PullRequests) setDraft(id int, draft bool) {
+	for i, pr := range m.prs {
+		if pr.ID == id {
+			m.prs[i].IsDraft = draft
+			return
+		}
+	}
 }
 
 // applyFilters rebuilds the browser's rows from the current filters, carrying
@@ -271,9 +290,38 @@ func (m *PullRequests) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.status, m.failed = msg.Text, msg.Err
 		return m, nil
 
+	case draftSetMsg:
+		if msg.Err != nil {
+			m.status, m.failed = msg.Err.Error(), true
+			return m, nil
+		}
+		m.setDraft(msg.PR, msg.Draft)
+		m.status, m.failed = fmt.Sprintf("!%d %s", msg.PR, draftDone(msg.Draft)), false
+		m.applyFilters()
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.browser.Filtering() {
 			break
+		}
+
+		// An armed toggle takes every key: the confirming press, esc, and
+		// nothing else. It is checked before the shared copy and open actions
+		// below for the same reason — y, s and o must not act while the
+		// status line is asking a question.
+		if m.armedDraft != nil {
+			confirm, cancel := resolveDraftKey(msg)
+			switch {
+			case cancel:
+				m.armedDraft = nil
+				m.status, m.failed = "", false
+			case confirm:
+				armed := m.armedDraft
+				m.armedDraft = nil
+				m.status, m.failed = draftDoing(armed.draft), false
+				return m, setDraftCmd(m.client, armed.repoID, armed.prID, armed.draft)
+			}
+			return m, nil
 		}
 
 		if row, ok := m.browser.Selected(); ok {
@@ -281,6 +329,26 @@ func (m *PullRequests) Update(msg tea.Msg) (View, tea.Cmd) {
 				m.status, m.failed = status.Text, status.Err
 				return m, nil
 			}
+		}
+
+		// Matched against the binding rather than by letter, unlike the cases
+		// below: this is the one key here that is also matched elsewhere —
+		// resolveDraftKey reads it to confirm — and the two must not be able
+		// to disagree about which key that is.
+		if key.Matches(msg, keyDraftToggle) {
+			row, ok := m.browser.Selected()
+			if !ok {
+				return m, nil
+			}
+			r, ok := row.(prRow)
+			if !ok {
+				return m, nil
+			}
+			m.armedDraft, m.status = armDraft(r.PullRequest)
+			// A refusal is reported as one: the key did nothing, and an
+			// ordinary-looking status line reads as though it had.
+			m.failed = m.armedDraft == nil
+			return m, nil
 		}
 
 		switch msg.String() {
@@ -417,7 +485,18 @@ func (m *PullRequests) Title() string {
 // See listKeys's own doc.
 func (m *PullRequests) Keys() help.KeyMap {
 	short := []key.Binding{keyPullRequest, keyDrafts, keyScope}
-	full := []key.Binding{keyPullRequest, keyReview, keyDrafts, keyScope}
+	// The draft toggle is labelled for the row under the cursor, so the panel
+	// reads "publish" on a draft and "mark draft" on a published one rather
+	// than making the reader work out which way the key goes. No draftable
+	// check here, unlike the detail view: this list asks for active pull
+	// requests and holds nothing else.
+	toggle := keyDraftToggle
+	if row, ok := m.browser.Selected(); ok {
+		if r, ok := row.(prRow); ok {
+			toggle = draftBinding(r.IsDraft)
+		}
+	}
+	full := []key.Binding{keyPullRequest, keyReview, keyDrafts, keyScope, toggle}
 	return listKeys(short, full...)
 }
 
@@ -430,6 +509,7 @@ func (m *PullRequests) Status() (string, bool) {
 	return m.work.View() + m.status, m.failed
 }
 
-// Prompting reports whether a text prompt is open, so Root leaves esc and q to
-// the prompt rather than treating them as navigation.
-func (m *PullRequests) Prompting() bool { return m.browser.Filtering() }
+// Prompting reports whether a text prompt or an armed draft toggle is open, so
+// Root leaves esc and q to this view rather than treating them as navigation —
+// esc has to cancel the arm, not pop the pane out from under it.
+func (m *PullRequests) Prompting() bool { return m.browser.Filtering() || m.armedDraft != nil }
