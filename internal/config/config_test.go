@@ -90,8 +90,11 @@ func TestPathHonoursXDGConfigHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Path returned %v", err)
 	}
-	if path != "/xdg/boardwalk.json" {
-		t.Errorf("path = %q, want it under XDG_CONFIG_HOME", path)
+	// Joined rather than spelled out: Path builds with filepath.Join, so the
+	// separator is the platform's, and a literal "/xdg/boardwalk.json" here
+	// only ever described the Unix half of that.
+	if want := filepath.Join("/xdg", "boardwalk.json"); path != want {
+		t.Errorf("path = %q, want %q", path, want)
 	}
 }
 
