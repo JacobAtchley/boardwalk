@@ -17,7 +17,7 @@ func buildStub() azdo.Build {
 func newRoot(t *testing.T, start string) *Root {
 	t.Helper()
 	c, items := fixture()
-	r := NewRoot(c, false, false, nil, start)
+	r := NewRoot(c, false, false, start)
 	updated, _ := r.Update(tea.WindowSizeMsg{Width: 140, Height: 30})
 	r = updated.(*Root)
 	// The work item view fetches on entry like every other view, so the batch
@@ -217,7 +217,7 @@ func TestRootOpensWorkItemsFromTheMenuAfterStartingElsewhere(t *testing.T) {
 	// slice to the view: the user was told their project had no work items, with
 	// no error and no way to load them.
 	c, _ := fixture()
-	r := NewRoot(c, false, false, nil, "prs")
+	r := NewRoot(c, false, false, "prs")
 	updated, _ := r.Update(tea.WindowSizeMsg{Width: 140, Height: 30})
 	r = updated.(*Root)
 
@@ -252,7 +252,7 @@ func TestRootDeliversDataToAViewThatIsNotOnTop(t *testing.T) {
 	// alone dropped the timeline on the log pane, leaving the build's in-flight
 	// guard set forever and its step and error columns reading "…" for good.
 	c, builds := buildFixture()
-	r := NewRoot(c, false, false, nil, "builds")
+	r := NewRoot(c, false, false, "builds")
 	updated, _ := r.Update(tea.WindowSizeMsg{Width: 160, Height: 30})
 	r = updated.(*Root)
 
@@ -309,7 +309,7 @@ func TestRootBroadcastsErrMsgToTheViewItBelongsToEvenWhenNotOnTop(t *testing.T) 
 	// PullRequests, the view that actually asked, never heard back and spun
 	// forever.
 	c, prs := prFixture()
-	r := NewRoot(c, false, false, nil, "prs")
+	r := NewRoot(c, false, false, "prs")
 	updated, _ := r.Update(tea.WindowSizeMsg{Width: 140, Height: 30})
 	r = updated.(*Root)
 	updated, _ = r.Update(prsMsg{PRs: prs})
@@ -392,7 +392,7 @@ func TestRootKeepsTheStatusLineForTheViewOnTop(t *testing.T) {
 	// A hidden view must not write the status line: the user would read it as
 	// describing whatever is actually on screen.
 	c, builds := buildFixture()
-	r := NewRoot(c, false, false, nil, "builds")
+	r := NewRoot(c, false, false, "builds")
 	updated, _ := r.Update(tea.WindowSizeMsg{Width: 160, Height: 30})
 	r = updated.(*Root)
 	updated, _ = r.Update(buildsMsg{Builds: builds})

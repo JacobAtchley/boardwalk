@@ -6,11 +6,12 @@ import "strings"
 //
 // Waiting means they are a reviewer and have not voted. They can be a reviewer
 // twice over: named directly, or through a group the pull request lists instead
-// of its members. Nothing in the payload says who belongs to a group, so the
-// caller supplies the groups to treat as theirs.
+// of its members. Nothing in the payload says who belongs to a group, so
+// Client.ReviewGroups supplies the groups to treat as theirs.
 //
 // Their own pull requests never count: authoring one is not reviewing it.
-func NeedsReviewFrom(pr PullRequest, me string, groups []string) bool {
+func (c *Client) NeedsReviewFrom(pr PullRequest) bool {
+	me := c.Me
 	if me == "" || pr.AuthorKey == me {
 		return false
 	}
@@ -18,7 +19,7 @@ func NeedsReviewFrom(pr PullRequest, me string, groups []string) bool {
 	var viaGroup bool
 	for _, r := range pr.Reviewers {
 		if r.IsGroup {
-			if inGroups(r.Name, groups) {
+			if inGroups(r.Name, c.ReviewGroups) {
 				viaGroup = true
 			}
 			continue
@@ -38,33 +39,88 @@ func NeedsReviewFrom(pr PullRequest, me string, groups []string) bool {
 // MyReviewerID finds the id the vote endpoint would need to address me on pr.
 //
 // Client.Me is an email address (uniqueName), but the vote endpoint is keyed
-// by GUID, and boardwalk never fetches the signed-in user's GUID on its own —
-// there is no endpoint here that hands it over in isolation. The only place it
-// appears is inside a pull request's own reviewers list, next to the
-// uniqueName it can be matched against. So a vote is only possible when I am
-// listed as a direct reviewer; if I am only covered by a group, there is
-// nothing in the payload naming me and no id to vote with.
-func MyReviewerID(pr PullRequest, me string) (string, bool) {
-	if me == "" {
+// by GUID. A pull request that names me directly carries that GUID next to the
+// uniqueName it can be matched against, and it is the one to prefer — it is
+// the entry the pull request itself already holds.
+//
+// Otherwise the vote falls back to Client.MyID, the identity fetched at
+// startup, but only where a group of mine is a reviewer: being able to open
+// somebody else's pull request is not being asked to review it. Voting with
+// that id is what the web UI does when a group member approves — Azure DevOps
+// adds the person as a reviewer in their own right and leaves the group entry
+// alone.
+//
+// No direct entry, no group of mine, or no identity fetched at startup: there
+// is nothing to vote with, and the caller says so rather than sending a
+// request that cannot work.
+func (c *Client) MyReviewerID(pr PullRequest) (string, bool) {
+	if c.Me == "" {
 		return "", false
 	}
+
+	var viaGroup bool
 	for _, r := range pr.Reviewers {
-		if !r.IsGroup && r.Key == me {
-			return r.ID, r.ID != ""
+		if r.IsGroup {
+			if inGroups(r.Name, c.ReviewGroups) {
+				viaGroup = true
+			}
+			continue
 		}
+		if r.Key == c.Me {
+			if r.ID != "" {
+				return r.ID, true
+			}
+			// Named without an id would be a server bug; my own identity
+			// addresses the same person, so use it rather than refuse.
+			return c.MyID, c.MyID != ""
+		}
+	}
+
+	if viaGroup {
+		return c.MyID, c.MyID != ""
 	}
 	return "", false
 }
 
+// inGroups reports whether a reviewer group is one of the configured ones.
+//
+// Azure DevOps scopes a group's display name to wherever it lives —
+// "[TEAM FOUNDATION]\platform-devs" for a collection group, "[MyProject]\Team
+// Name" for a project one — and nobody writes that in a config file; they
+// write the name the group is called. So a configured name with no scope is
+// matched against the group's bare name, and a configured name that carries
+// one is matched whole: writing the scope out means meaning it, and two
+// projects can each have a "developers".
 func inGroups(name string, groups []string) bool {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return false
 	}
+	bare := unscoped(name)
+
 	for _, g := range groups {
-		if strings.EqualFold(strings.TrimSpace(g), name) {
+		g = strings.TrimSpace(g)
+		if g == "" {
+			continue
+		}
+		if strings.ContainsRune(g, '\\') {
+			if strings.EqualFold(g, name) {
+				return true
+			}
+			continue
+		}
+		if bare != "" && strings.EqualFold(g, bare) {
 			return true
 		}
 	}
 	return false
+}
+
+// unscoped drops the "[scope]\" Azure DevOps prefixes a group name with,
+// leaving the name the group is known by.
+func unscoped(name string) string {
+	if i := strings.LastIndex(name, `\`); i >= 0 {
+		return strings.TrimSpace(name[i+1:])
+	}
+	return name
 }

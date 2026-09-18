@@ -411,7 +411,7 @@ func TestPullRequestsDraftToggleWithNoRowSelected(t *testing.T) {
 	// no arm, no command. It says nothing either: the view is already showing
 	// its own empty state, which explains the absence better than a status
 	// line answering a key the user pressed into an empty screen.
-	m := NewPullRequests(&azdo.Client{Org: "acme", Project: "Platform"}, nil)
+	m := NewPullRequests(&azdo.Client{Org: "acme", Project: "Platform"})
 	m.repoOnly = false
 	updated, _ := m.Update(prsMsg{PRs: nil})
 	m = updated.(*PullRequests)

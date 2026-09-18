@@ -69,11 +69,18 @@ Everything boardwalk needs to know lives in one file at
 | `project` | the team project within it |
 | `reviewGroups` | teams and security groups you belong to, named as Azure DevOps displays them |
 
+Azure DevOps scopes a group's display name to wherever it lives —
+`[TEAM FOUNDATION]\platform-devs` for a collection group, `[MyProject]\Team
+Name` for a project one. Name the group on its own (`platform-devs`) and the
+scope is ignored; write the scope out and it has to match, which is how two
+projects can each have a `developers` and only one of them be yours.
+
 `org` and `project` are required; boardwalk will tell you which is missing, and
 show you the shape, if either is absent.
 
 `reviewGroups` is what lets `v` in the pull request view find work assigned to a
-group rather than to you. A pull request can list a group as its reviewer, and
+group rather than to you, and what lets you vote on a pull request only a group
+of yours is reviewing. A pull request can list a group as its reviewer, and
 nothing in the pull request payload says who is in that group — resolving it
 would mean the Graph API, a second host and a walk through nested memberships.
 Naming them here costs no requests and works offline, at the price of going
@@ -192,6 +199,13 @@ discussion — whole threads, not just the line each one opens with — unresolv
 first. `w` opens the first linked work item. `c` replies to the first
 unresolved thread and `R` resolves it, both without leaving the view. `D` opens
 the diff.
+
+`A` approves, `W` waits for the author and `X` rejects, each on a second press
+of the same key. They show when the pull request is yours to vote on — named
+directly, or through a group listed in `reviewGroups`. Voting on a group's
+behalf casts the vote under your own identity, which boardwalk reads once at
+startup from `connectionData`; Azure DevOps then adds you as a reviewer in your
+own right and leaves the group entry alone, exactly as the web UI does.
 
 ### Diff
 

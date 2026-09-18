@@ -28,7 +28,7 @@ func prFixture() (*azdo.Client, []azdo.PullRequest) {
 func newPRs(t *testing.T) *PullRequests {
 	t.Helper()
 	c, prs := prFixture()
-	m := NewPullRequests(c, nil)
+	m := NewPullRequests(c)
 	m.now = func() time.Time { return time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC) }
 	// NewPullRequests scopes to the working directory's repository when
 	// azdo.CurrentRepo() finds one, which depends on this checkout's git
@@ -184,7 +184,7 @@ func TestPullRequestsFailedFetchReplacesTheFetchingPlaceholder(t *testing.T) {
 	// reading "fetching pull requests…" while the status line under it said the
 	// fetch had failed — two contradictory statements on one screen.
 	c, _ := prFixture()
-	m := NewPullRequests(c, nil)
+	m := NewPullRequests(c)
 
 	if got := m.Body(160, 20); !strings.Contains(got, "fetching pull requests") {
 		t.Fatalf("expected the fetching placeholder before anything lands:\n%s", got)
@@ -225,7 +225,7 @@ func TestPullRequestsRefetchesOnR(t *testing.T) {
 
 func TestPullRequestsSpinsWhileLoadingAndStopsWhenItLands(t *testing.T) {
 	c, prs := prFixture()
-	m := NewPullRequests(c, nil)
+	m := NewPullRequests(c)
 	m.now = func() time.Time { return time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC) }
 	m.repoOnly = false
 	m.drafts = draftsAll // both fixture rows visible, so the fan-out is two deep
@@ -271,7 +271,7 @@ func TestPullRequestsStopsSpinningWhenAFetchFails(t *testing.T) {
 	// A failure that left the counter up would spin forever with nothing
 	// running — the same shape as the in-flight guards that stranded rows.
 	c, _ := prFixture()
-	m := NewPullRequests(c, nil)
+	m := NewPullRequests(c)
 	m.repoOnly = false
 	m.Init()
 	r := drive(t, m, 160, 20)
@@ -285,7 +285,8 @@ func TestPullRequestsStopsSpinningWhenAFetchFails(t *testing.T) {
 
 func TestPullRequestsNeedsMyReviewFilter(t *testing.T) {
 	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
-	c := &azdo.Client{Org: "acme", Project: "Platform", Me: "dev@acme.test"}
+	c := &azdo.Client{Org: "acme", Project: "Platform", Me: "dev@acme.test",
+		ReviewGroups: []string{"platform-devs"}}
 	prs := []azdo.PullRequest{
 		{ID: 601, Title: "Waiting on me directly", Repo: "platform-api", RepoID: "r1",
 			Author: "Other Dev", AuthorKey: "other@acme.test", Created: now,
@@ -304,7 +305,7 @@ func TestPullRequestsNeedsMyReviewFilter(t *testing.T) {
 			Reviewers: []azdo.Reviewer{{Name: "platform-devs", IsGroup: true}}},
 	}
 
-	m := NewPullRequests(c, []string{"platform-devs"})
+	m := NewPullRequests(c)
 	m.now = func() time.Time { return now }
 	m.repoOnly = false
 	updated, _ := m.Update(prsMsg{PRs: prs})
@@ -342,7 +343,7 @@ func TestPullRequestsReviewFilterSaysWhenNoGroupsAreConfigured(t *testing.T) {
 	// With no groups listed, a group-reviewed pull request cannot match, and an
 	// empty list would otherwise look like a failed fetch.
 	c := &azdo.Client{Org: "acme", Project: "Platform", Me: "dev@acme.test"}
-	m := NewPullRequests(c, nil)
+	m := NewPullRequests(c)
 	m.repoOnly = false
 	updated, _ := m.Update(prsMsg{PRs: []azdo.PullRequest{
 		{ID: 606, Title: "Waiting on my group", Repo: "a", RepoID: "r1",
@@ -377,8 +378,6 @@ func threadsResolved(resolved, unresolved int) []azdo.Thread {
 func TestPullRequestsEmptyStateNamesTheFilterThatEmptiedIt(t *testing.T) {
 	// Every one of these empties the list for a different reason, and the
 	// wrong explanation sends the user looking in the wrong place.
-	c := &azdo.Client{Org: "acme", Project: "Platform", Me: "dev@acme.test"}
-
 	for _, tc := range []struct {
 		name  string
 		setup func(*PullRequests)
@@ -389,14 +388,18 @@ func TestPullRequestsEmptyStateNamesTheFilterThatEmptiedIt(t *testing.T) {
 			m.repoOnly, m.repo = true, "platform-api"
 		}, "no pull requests open in platform-api"},
 		{"waiting on my review", func(m *PullRequests) {
-			m.mineToReview, m.reviewGroups = true, []string{"platform-devs"}
+			m.mineToReview, m.client.ReviewGroups = true, []string{"platform-devs"}
 		}, "nothing waiting on your review"},
 		{"no review groups configured", func(m *PullRequests) {
 			m.mineToReview = true
 		}, "no review groups are configured"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m := NewPullRequests(c, nil)
+			// A client each: the group case configures one on it, and a
+			// shared client would carry that into the case that must find
+			// none.
+			c := &azdo.Client{Org: "acme", Project: "Platform", Me: "dev@acme.test"}
+			m := NewPullRequests(c)
 			m.repoOnly = false
 			tc.setup(m)
 			updated, _ := m.Update(prsMsg{})
