@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"strings"
 	"time"
@@ -23,6 +24,12 @@ const Resource = "499b84ac-1321-427f-aa17-267ca6975798"
 // underneath us.
 const APIVersion = "7.1"
 
+// connectionDataAPIVersion is APIVersion's preview twin. connectionData is the
+// one endpoint boardwalk calls that is still preview-only at 7.1: asking for
+// the plain version comes back as "the -preview flag must be supplied in the
+// api-version for such requests".
+const connectionDataAPIVersion = APIVersion + "-preview"
+
 type Client struct {
 	Org     string
 	Project string
@@ -30,6 +37,20 @@ type Client struct {
 	// Me is the signed-in user's email, lowercased, used to tell "mine" from
 	// everyone else's without a second round trip.
 	Me string
+
+	// MyID is the signed-in user's Azure DevOps identity GUID, which is how
+	// the vote endpoint addresses a reviewer — an email does not work there.
+	// It is best-effort: empty when connectionData could not be reached, in
+	// which case only a pull request that names me directly carries an id I
+	// can vote with.
+	MyID string
+
+	// ReviewGroups are the teams and security groups the signed-in user
+	// belongs to, from the config file. Azure DevOps never says who is in a
+	// group it lists as a reviewer, so membership has to be declared. It
+	// lives next to Me and MyID because it answers the same question — who
+	// this session is — and every caller asking it already holds the client.
+	ReviewGroups []string
 
 	token string
 	http  *http.Client
@@ -55,13 +76,46 @@ func NewClient(org, project string) (*Client, error) {
 	// Not fatal: without it every item simply reads as someone else's.
 	me, _ := az("account", "show", "--query", "user.name", "-o", "tsv")
 
-	return &Client{
+	c := &Client{
 		Org:     org,
 		Project: project,
 		Me:      strings.ToLower(me),
 		token:   token,
 		http:    &http.Client{Timeout: 30 * time.Second},
-	}, nil
+	}
+
+	// Also not fatal: without it, voting still works wherever the pull
+	// request names me directly, which is where it worked before there was
+	// an identity to fall back on.
+	_ = c.loadMyID()
+
+	return c, nil
+}
+
+// loadMyID fetches the signed-in user's identity GUID.
+//
+// connectionData is the only endpoint that hands it over without already
+// knowing it: every other route to an identity is keyed by the id itself or
+// by a descriptor boardwalk does not have. One call at startup, so that
+// voting does not depend on the pull request happening to name me.
+func (c *Client) loadMyID() error {
+	endpoint := fmt.Sprintf("%s/%s/_apis/connectionData?api-version=%s",
+		c.root(), url.PathEscape(c.Org), connectionDataAPIVersion)
+
+	var body struct {
+		AuthenticatedUser struct {
+			ID string `json:"id"`
+		} `json:"authenticatedUser"`
+	}
+	if err := c.get(endpoint, &body); err != nil {
+		return err
+	}
+	if body.AuthenticatedUser.ID == "" {
+		return fmt.Errorf("connectionData named no authenticated user")
+	}
+
+	c.MyID = body.AuthenticatedUser.ID
+	return nil
 }
 
 func az(args ...string) (string, error) {

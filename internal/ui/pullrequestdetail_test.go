@@ -574,25 +574,102 @@ func TestVoteKeySwallowsOtherKeysWhileArmed(t *testing.T) {
 	}
 }
 
-func TestVoteWithoutADirectReviewerIDReportsClearly(t *testing.T) {
-	// Covered only by the group, not named individually: nothing in the
-	// payload gives a vote something to address.
+func TestVoteOnAGroupsBehalfUsesMyOwnIdentity(t *testing.T) {
+	// The bug: Azure DevOps lists only the group, so the pull request names
+	// nobody to address — but the identity fetched at startup does.
 	c, pr := prDetailFixture()
+	c.MyID, c.ReviewGroups = "my-guid", []string{"platform-devs"}
 	pr.Reviewers = []azdo.Reviewer{{Name: "platform-devs", IsGroup: true}}
+	m := NewPullRequestDetail(c, pr, nil)
+	r := drive(t, m, 100, 60)
+
+	r.send(runes("A"))
+
+	if m.armedVote == nil {
+		t.Fatal("A did not arm the approve vote for a group I am in")
+	}
+	if m.armedVote.reviewerID != "my-guid" {
+		t.Errorf("reviewerID = %q, want my own identity", m.armedVote.reviewerID)
+	}
+	if !strings.Contains(r.frame(), "A approves") {
+		t.Errorf("the vote keys are not offered:\n%s", r.frame())
+	}
+}
+
+func TestVoteCastOnAGroupsBehalfAddsMeToTheReviewers(t *testing.T) {
+	// Azure DevOps adds the voter as a reviewer in their own right. The view
+	// says so without a refetch, the same as it does for a vote it can find.
+	c, pr := prDetailFixture()
+	c.MyID, c.ReviewGroups = "my-guid", []string{"platform-devs"}
+	pr.Reviewers = []azdo.Reviewer{{Name: "platform-devs", IsGroup: true}}
+	m := NewPullRequestDetail(c, pr, nil)
+	r := drive(t, m, 100, 60)
+
+	r.send(voteCastMsg{PR: 512, ReviewerID: "my-guid", Vote: azdo.VoteApproved})
+
+	if len(m.pr.Reviewers) != 2 {
+		t.Fatalf("reviewers = %+v, want my own entry added", m.pr.Reviewers)
+	}
+	me := m.pr.Reviewers[1]
+	if me.ID != "my-guid" || me.Key != "dev@acme.test" || me.Vote != azdo.VoteApproved {
+		t.Errorf("added reviewer = %+v, want my approval", me)
+	}
+	if !strings.Contains(r.frame(), "approved") {
+		t.Errorf("the cast vote is not shown:\n%s", r.frame())
+	}
+}
+
+func TestVoteWithoutBeingAReviewerReportsClearly(t *testing.T) {
+	// Not named, and not covered by any group of mine: an id exists, but
+	// nothing says this pull request is mine to vote on.
+	c, pr := prDetailFixture()
+	c.MyID, c.ReviewGroups = "my-guid", []string{"platform-devs"}
+	pr.Reviewers = []azdo.Reviewer{{Name: "other-team", IsGroup: true}}
 	m := NewPullRequestDetail(c, pr, nil)
 	r := drive(t, m, 100, 60)
 
 	cmd := r.send(runes("A"))
 
 	if cmd != nil {
-		t.Error("arming a vote with no reviewer id to address it started work")
+		t.Error("arming a vote on a pull request I do not review started work")
 	}
 	if m.armedVote != nil {
-		t.Error("a vote armed with nothing to address it")
+		t.Error("a vote armed on a pull request I do not review")
 	}
 	status, isErr := m.Status()
-	if !isErr || !strings.Contains(status, "not a direct reviewer") {
-		t.Errorf("status = %q, isErr = %v, want it to explain there is no id to vote with", status, isErr)
+	if !isErr || !strings.Contains(status, "not a reviewer") {
+		t.Errorf("status = %q, isErr = %v, want it to say I am not a reviewer", status, isErr)
+	}
+}
+
+func TestVoteWithoutAnIdentityReportsClearly(t *testing.T) {
+	// My group is listed, so the vote is mine to cast — but connectionData
+	// failed at startup, so there is no id to cast it with. Saying "you are
+	// not a reviewer" here would be a lie about the wrong thing.
+	c, pr := prDetailFixture()
+	c.ReviewGroups = []string{"platform-devs"}
+	pr.Reviewers = []azdo.Reviewer{{Name: "platform-devs", IsGroup: true}}
+	m := NewPullRequestDetail(c, pr, nil)
+	r := drive(t, m, 100, 60)
+
+	cmd := r.send(runes("A"))
+
+	if cmd != nil || m.armedVote != nil {
+		t.Error("a vote armed with no identity to cast it with")
+	}
+	status, isErr := m.Status()
+	if !isErr || !strings.Contains(status, "identity") {
+		t.Errorf("status = %q, isErr = %v, want it to blame the missing identity", status, isErr)
+	}
+}
+
+func TestVoteKeysAreHiddenWhenThereIsNothingToVoteWith(t *testing.T) {
+	c, pr := prDetailFixture()
+	pr.Reviewers = []azdo.Reviewer{{Name: "platform-devs", IsGroup: true}}
+	m := NewPullRequestDetail(c, pr, nil)
+
+	if view := drive(t, m, 100, 60).frame(); strings.Contains(view, "A approves") {
+		t.Errorf("the vote keys are offered with nothing to vote with:\n%s", view)
 	}
 }
 

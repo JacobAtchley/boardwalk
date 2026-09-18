@@ -250,19 +250,29 @@ func (m *PullRequestDetail) voteCmd(reviewerID string, vote int) tea.Cmd {
 // armVote starts (or restarts) the confirm step for vote, naming what the
 // second press will do on the status line.
 func (m *PullRequestDetail) armVote(vote int, label string) {
-	id, ok := azdo.MyReviewerID(m.pr, m.client.Me)
+	id, ok := m.client.MyReviewerID(m.pr)
 	if !ok {
-		// MyReviewerID's doc explains why: the vote endpoint wants a GUID that
-		// only appears in the pull request's own reviewers list, so someone
-		// covered solely by a group has nothing to vote with. Arming would
-		// only fail later at the network call, which hides the real reason;
-		// saying so here instead is the whole point of checking before firing.
+		// Two different refusals wear the same "no id" face, and telling them
+		// apart is the difference between a fact about this pull request and
+		// a fact about this session. Arming anyway would only fail later at
+		// the network call, which hides both reasons.
 		m.armedVote = nil
-		m.status, m.failed = "you are not a direct reviewer on this pull request — only a group is, so there is no id to vote with", true
+		m.status, m.failed = noVoteReason(m.client.MyID), true
 		return
 	}
 	m.armedVote = &pendingVote{reviewerID: id, vote: vote, label: label}
 	m.status, m.failed = fmt.Sprintf("press again to %s — esc cancels", label), false
+}
+
+// noVoteReason says why a vote cannot be cast. An empty identity means
+// connectionData failed at startup, which is worth saying plainly: the vote
+// may well be this person's to cast, and a stale `az login` is something they
+// can fix. Otherwise they simply are not on the hook for this pull request.
+func noVoteReason(myID string) string {
+	if myID == "" {
+		return "boardwalk could not work out your Azure DevOps identity at startup — restart it with a current `az login` to vote"
+	}
+	return "you are not a reviewer on this pull request — neither directly nor through a group in reviewGroups"
 }
 
 // handleArmedVote resolves a keypress while a vote is armed. esc cancels, the
@@ -310,14 +320,23 @@ func (m *PullRequestDetail) handleArmedDraft(msg tea.KeyMsg) tea.Cmd {
 // updateReviewerVote rewrites the cached reviewer's vote in place, the same
 // cache-over-refetch approach updateThread takes below: the vote this view
 // just sent is already known without asking the server again.
-func (m *PullRequestDetail) updateReviewerVote(reviewerID string, vote int) bool {
+func (m *PullRequestDetail) updateReviewerVote(reviewerID string, vote int) {
 	for i, r := range m.pr.Reviewers {
 		if r.ID == reviewerID {
 			m.pr.Reviewers[i].Vote = vote
-			return true
+			return
 		}
 	}
-	return false
+
+	// Voting on a group's behalf: there was no entry for me, and Azure DevOps
+	// has just made one. Adding it here keeps the reviewers list honest about
+	// what was cast, the same way rewriting an existing entry does.
+	m.pr.Reviewers = append(m.pr.Reviewers, azdo.Reviewer{
+		Name: m.client.Me,
+		Key:  m.client.Me,
+		ID:   reviewerID,
+		Vote: vote,
+	})
 }
 
 // updateThread rewrites the cached thread with id in place and reports
@@ -596,7 +615,7 @@ func (m *PullRequestDetail) render(width int) string {
 		}
 		fmt.Fprintf(&b, "  %s — %s\n", name, voteStyle(r.Vote).Render(r.VoteLabel()))
 	}
-	if _, ok := azdo.MyReviewerID(m.pr, m.client.Me); ok {
+	if _, ok := m.client.MyReviewerID(m.pr); ok {
 		fmt.Fprintf(&b, "%s\n", chromeStyle.Render("  A approves · W waits for author · X rejects"))
 	}
 

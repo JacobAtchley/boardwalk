@@ -152,6 +152,10 @@ func run(start string, mineOnly, all, dump, timing bool) error {
 	if err != nil {
 		return err
 	}
+	// Group membership is config, not something Azure DevOps will say: it
+	// rides on the client because every caller that asks who this session is
+	// already holds one.
+	client.ReviewGroups = cfg.ReviewGroups
 
 	// -dump is the one path that still fetches before anything renders: it
 	// prints rows and exits without a TUI, so there is no view to fetch on
@@ -178,7 +182,7 @@ func run(start string, mineOnly, all, dump, timing bool) error {
 		return nil
 	}
 
-	root := ui.NewRoot(client, mineOnly, all, cfg.ReviewGroups, start)
+	root := ui.NewRoot(client, mineOnly, all, start)
 	_, err = tea.NewProgram(root, tea.WithAltScreen()).Run()
 	return err
 }

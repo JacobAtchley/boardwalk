@@ -124,10 +124,6 @@ type PullRequests struct {
 	// filter would re-sort the list under a toggle armed on one of its rows.
 	armedDraft *armedDraft
 
-	// reviewGroups are the teams and security groups the user belongs to, from
-	// the config file. A pull request can name a group as its reviewer instead
-	// of a person, and the payload does not say who is in it.
-	reviewGroups []string
 	// mineToReview narrows the list to pull requests waiting on this user.
 	mineToReview bool
 
@@ -141,17 +137,16 @@ type PullRequests struct {
 // NewPullRequests builds the pull request browser. It fetches nothing itself —
 // Init does that — so it can be constructed before the client is ready to talk
 // to the network in a test.
-func NewPullRequests(c *azdo.Client, reviewGroups []string) *PullRequests {
+func NewPullRequests(c *azdo.Client) *PullRequests {
 	m := &PullRequests{
-		client:       c,
-		reviewGroups: reviewGroups,
-		browser:      NewBrowser(),
-		counts:       map[int]azdo.ThreadCounts{},
-		threads:      map[int][]azdo.Thread{},
-		work:         newWork(),
-		loading:      map[int]bool{},
-		repo:         azdo.CurrentRepo(),
-		now:          time.Now,
+		client:  c,
+		browser: NewBrowser(),
+		counts:  map[int]azdo.ThreadCounts{},
+		threads: map[int][]azdo.Thread{},
+		work:    newWork(),
+		loading: map[int]bool{},
+		repo:    azdo.CurrentRepo(),
+		now:     time.Now,
 	}
 	// Starting narrow when boardwalk is run inside a repository matches what
 	// the user is looking at; ^t widens.
@@ -183,7 +178,7 @@ func (m *PullRequests) visible() []azdo.PullRequest {
 		if m.repoOnly && m.repo != "" && pr.Repo != m.repo {
 			continue
 		}
-		if m.mineToReview && !azdo.NeedsReviewFrom(pr, m.client.Me, m.reviewGroups) {
+		if m.mineToReview && !m.client.NeedsReviewFrom(pr) {
 			continue
 		}
 		out = append(out, pr)
@@ -445,7 +440,7 @@ func (m *PullRequests) Body(width, height int) string {
 // queue the user has no way to see into.
 func (m *PullRequests) emptyMessage() string {
 	switch {
-	case m.mineToReview && len(m.reviewGroups) == 0:
+	case m.mineToReview && len(m.client.ReviewGroups) == 0:
 		return "no review groups are configured, so nothing can match"
 	case m.mineToReview:
 		return "nothing waiting on your review"
@@ -469,7 +464,7 @@ func (m *PullRequests) Title() string {
 	review := ""
 	if m.mineToReview {
 		review = " · needs my review"
-		if len(m.reviewGroups) == 0 {
+		if len(m.client.ReviewGroups) == 0 {
 			review += " (no groups configured)"
 		}
 	}

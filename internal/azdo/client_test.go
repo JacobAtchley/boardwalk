@@ -140,3 +140,39 @@ func TestDiscardingTheBodyIsAllowed(t *testing.T) {
 		t.Fatalf("get with a nil out returned %v", err)
 	}
 }
+
+func TestLoadMyIDReadsTheAuthenticatedUsersGUID(t *testing.T) {
+	var path, query string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		path, query = r.URL.Path, r.URL.Query().Get("api-version")
+		w.Write([]byte(`{"authenticatedUser":{"id":"my-guid","providerDisplayName":"Dev Example"}}`))
+	})
+
+	if err := c.loadMyID(); err != nil {
+		t.Fatalf("loadMyID returned %v", err)
+	}
+	if c.MyID != "my-guid" {
+		t.Errorf("MyID = %q, want the authenticated user's id", c.MyID)
+	}
+	if path != "/acme/_apis/connectionData" {
+		t.Errorf("path = %q, want the organization's connectionData", path)
+	}
+	// connectionData is preview-only: plain 7.1 is rejected outright with
+	// "the -preview flag must be supplied in the api-version".
+	if query != connectionDataAPIVersion {
+		t.Errorf("api-version = %q, want %q", query, connectionDataAPIVersion)
+	}
+}
+
+func TestLoadMyIDReportsAnEmptyIdentity(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"authenticatedUser":{"id":""}}`))
+	})
+
+	if err := c.loadMyID(); err == nil {
+		t.Error("an identity with no id was accepted")
+	}
+	if c.MyID != "" {
+		t.Errorf("MyID = %q, want it left empty", c.MyID)
+	}
+}
