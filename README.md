@@ -371,10 +371,6 @@ what Azure DevOps does with it:
   **Worth smoke-testing one approve against a real pull request before relying
   on the vote keys** — it is the one of these that fails closest to something
   destructive.
-- Whether that same PUT, addressed with your own identity on a pull request
-  that lists only your group, adds you as a reviewer rather than being refused.
-  The id itself is verified: `connectionData` returns the same GUID the
-  reviewers list carries for a direct reviewer.
 - Whether a binary blob's `content` comes back raw or base64-encoded. If it is
   base64 the NUL-byte check never fires and a binary renders as base64 text
   rather than being declined. It carries no escape bytes either way, so the
