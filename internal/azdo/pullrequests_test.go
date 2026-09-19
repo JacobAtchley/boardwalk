@@ -424,3 +424,103 @@ func TestSetDraftReportsAServerRefusal(t *testing.T) {
 		t.Errorf("error = %v, want the server message", err)
 	}
 }
+
+// TestThreadsCarryTheLineTheyWereWrittenAgainst — filePath alone says which
+// file a review comment is about; the diff view needs to know which line, and
+// threadContext carries that too.
+func TestThreadsCarryTheLineTheyWereWrittenAgainst(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"value":[
+			{"id":1,"status":"active","threadContext":{"filePath":"/internal/ui/logs.go",
+				"rightFileStart":{"line":42,"offset":1},"rightFileEnd":{"line":42,"offset":9}},
+			 "comments":[{"id":1,"content":"this leaks","commentType":"text"}]},
+			{"id":2,"status":"active","threadContext":{"filePath":"/internal/ui/old.go",
+				"leftFileStart":{"line":7,"offset":1}},
+			 "comments":[{"id":1,"content":"why was this dropped","commentType":"text"}]},
+			{"id":3,"status":"active","threadContext":{"filePath":"/README.md"},
+			 "comments":[{"id":1,"content":"file-level note","commentType":"text"}]},
+			{"id":4,"status":"active",
+			 "comments":[{"id":1,"content":"about the whole pull request","commentType":"text"}]}
+		]}`))
+	})
+
+	threads, err := c.Threads("repo-1", 512)
+	if err != nil {
+		t.Fatalf("Threads returned %v", err)
+	}
+	if len(threads) != 4 {
+		t.Fatalf("got %d threads, want 4", len(threads))
+	}
+
+	for _, tc := range []struct {
+		name      string
+		thread    Thread
+		wantFile  string
+		wantLine  int
+		wantRight bool
+	}{
+		{"on the new side", threads[0], "/internal/ui/logs.go", 42, true},
+		{"on the old side", threads[1], "/internal/ui/old.go", 7, false},
+		{"on a file but no line", threads[2], "/README.md", 0, false},
+		{"on the pull request itself", threads[3], "", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.thread.File != tc.wantFile {
+				t.Errorf("File = %q, want %q", tc.thread.File, tc.wantFile)
+			}
+			if tc.thread.Line != tc.wantLine {
+				t.Errorf("Line = %d, want %d", tc.thread.Line, tc.wantLine)
+			}
+			if tc.thread.RightSide != tc.wantRight {
+				t.Errorf("RightSide = %v, want %v", tc.thread.RightSide, tc.wantRight)
+			}
+		})
+	}
+}
+
+// TestThreadOnBothSidesPrefersTheNewOne — a comment on a line that was
+// changed rather than added carries both. The new side is where the reader is
+// looking, and it is the side the diff pane numbers its lines by.
+func TestThreadOnBothSidesPrefersTheNewOne(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"value":[{"id":1,"status":"active","threadContext":{"filePath":"/a.go",
+			"leftFileStart":{"line":10},"rightFileStart":{"line":12}},
+			"comments":[{"id":1,"content":"x","commentType":"text"}]}]}`))
+	})
+
+	threads, err := c.Threads("repo-1", 512)
+	if err != nil {
+		t.Fatalf("Threads returned %v", err)
+	}
+	if threads[0].Line != 12 || !threads[0].RightSide {
+		t.Errorf("Line = %d RightSide = %v, want 12 and the new side",
+			threads[0].Line, threads[0].RightSide)
+	}
+}
+
+func TestThreadsForFileGroupsByPath(t *testing.T) {
+	threads := []Thread{
+		{ID: 1, File: "/a.go", Line: 3},
+		{ID: 2, File: "/b.go", Line: 9},
+		{ID: 3, File: "/a.go", Line: 40},
+		{ID: 4}, // on the pull request itself, not on any file
+	}
+
+	got := ThreadsForFile(threads, "/a.go")
+	if len(got) != 2 {
+		t.Fatalf("got %d threads for /a.go, want 2", len(got))
+	}
+	if got[0].ID != 1 || got[1].ID != 3 {
+		t.Errorf("got threads %d and %d, want 1 and 3", got[0].ID, got[1].ID)
+	}
+
+	// Azure DevOps writes a thread's path with a leading slash and the change
+	// list does too, but matching has to survive one of them arriving without
+	// it rather than silently finding nothing.
+	if len(ThreadsForFile(threads, "a.go")) != 2 {
+		t.Error("a path without its leading slash matched nothing")
+	}
+	if len(ThreadsForFile(threads, "/nothing.go")) != 0 {
+		t.Error("a file with no discussion matched something")
+	}
+}
