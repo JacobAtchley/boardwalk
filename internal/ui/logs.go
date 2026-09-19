@@ -43,7 +43,19 @@ type Logs struct {
 	// lastTask is the task whose rule was written most recently, so an append
 	// to the same log does not repeat the heading.
 	lastTask string
-	text     strings.Builder
+
+	// lines is every line the pane has been given, parsed but not rendered,
+	// and text is the rendered buffer the viewport reads. Both are kept: an
+	// append writes only the new lines into text, which is the every-three-
+	// seconds path, while a timestamp toggle rewrites text from lines, which
+	// happens only when a key is pressed. Both go through writeLogLine, so
+	// the two paths cannot disagree about how a line looks.
+	lines []logLine
+	text  strings.Builder
+
+	// showStamps is whether the timestamp prefix is on screen. See keyStamps
+	// for why it starts off.
+	showStamps bool
 
 	// fetching is a single-flight guard. fetch's closure mutates m.cursor in
 	// place, and bubbletea runs each returned Cmd in its own goroutine — two
@@ -166,16 +178,24 @@ func (m *Logs) Update(msg tea.Msg) (View, tea.Cmd) {
 		return m, m.startFetch()
 
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "esc", "q":
+		// Matched against the bindings in keys.go rather than against raw
+		// strings: this view's footer is built from those bindings, and a
+		// handler keyed off the letters instead was a second copy of the same
+		// mapping, free to drift from the one the reader is shown.
+		switch {
+		case key.Matches(msg, keyBack), key.Matches(msg, keyQuit):
 			return m, func() tea.Msg { return PopMsg{} }
-		case "g":
+		case key.Matches(msg, keyTop):
 			m.viewport.GotoTop()
 			return m, nil
-		case "G":
+		case key.Matches(msg, keyBottom):
 			m.viewport.GotoBottom()
 			return m, nil
-		case "r":
+		case key.Matches(msg, keyStamps):
+			m.showStamps = !m.showStamps
+			m.rebuild()
+			return m, nil
+		case key.Matches(msg, keyRefresh):
 			cmd := m.startFetch()
 			if cmd == nil {
 				// A fetch is already outstanding; let it land rather than
@@ -184,12 +204,12 @@ func (m *Logs) Update(msg tea.Msg) (View, tea.Cmd) {
 			}
 			m.status, m.failed = "refreshing…", false
 			return m, cmd
-		case "o":
+		case key.Matches(msg, keyOpen):
 			status := report("opened the build in a browser",
 				"could not open a browser", openBrowser(m.client.BuildURL(m.build.ID)))
 			m.status, m.failed = status.Text, status.Err
 			return m, nil
-		case "y":
+		case key.Matches(msg, keyCopyID):
 			status := report(fmt.Sprintf("copied id %d", m.build.ID),
 				"could not copy to the clipboard", copyToClipboard(fmt.Sprint(m.build.ID)))
 			m.status, m.failed = status.Text, status.Err
@@ -212,12 +232,11 @@ func (m *Logs) append(chunks []azdo.LogChunk) {
 	atBottom := m.viewport.AtBottom()
 	for _, c := range chunks {
 		if c.Task != m.lastTask {
-			fmt.Fprintf(&m.text, "\n%s\n", chromeStyle.Render("── "+c.Task+" ──"))
+			m.add(taskRule(c.Task))
 			m.lastTask = c.Task
 		}
 		for _, line := range c.Lines {
-			m.text.WriteString(line)
-			m.text.WriteByte('\n')
+			m.add(parseLogLine(line))
 		}
 	}
 
@@ -226,6 +245,43 @@ func (m *Logs) append(chunks []azdo.LogChunk) {
 	if atBottom {
 		m.viewport.GotoBottom()
 	}
+}
+
+// add records a line and renders it onto the end of the buffer.
+func (m *Logs) add(l logLine) {
+	m.lines = append(m.lines, l)
+	writeLogLine(&m.text, l, m.showStamps)
+}
+
+// taskRule is the heading written between one task's output and the next. It
+// is a logLine rather than text written straight to the buffer so that a
+// rebuild replays it in place along with the lines it separates. The blank
+// line above it is writeLogLine's job, not part of the text — see there.
+func taskRule(task string) logLine {
+	return logLine{Level: levelTaskRule, Text: "── " + task + " ──"}
+}
+
+// rebuild renders every line again, which is what the timestamp toggle needs:
+// the prefix is baked into the buffer at append time, so showing or hiding it
+// means rewriting what is already there. The scroll position is left exactly
+// where it was — the toggle is for reading the part of the log already on
+// screen, and throwing the reader back to the top would defeat it. Line count
+// does not change, so the offset still points at the same line.
+func (m *Logs) rebuild() {
+	offset := m.viewport.YOffset
+	atBottom := m.viewport.AtBottom()
+
+	m.text.Reset()
+	for _, l := range m.lines {
+		writeLogLine(&m.text, l, m.showStamps)
+	}
+	m.viewport.SetContent(m.text.String())
+
+	if atBottom {
+		m.viewport.GotoBottom()
+		return
+	}
+	m.viewport.SetYOffset(offset)
 }
 
 // Body renders the viewport at the size Root has left for it.
@@ -255,7 +311,7 @@ func (m *Logs) Title() string {
 // caught here because this one never overflowed. Copy-id and open are still
 // one press of "?" away in the panel's second column.
 func (m *Logs) Keys() help.KeyMap {
-	own := []key.Binding{keyTop, keyBottom}
+	own := []key.Binding{keyTop, keyBottom, keyStamps}
 	if m.build.Status.Done() {
 		own = append(own, keyRefresh)
 	}

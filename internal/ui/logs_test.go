@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -189,5 +190,112 @@ func TestLogsErrorIsReportedWithoutLosingTheText(t *testing.T) {
 	}
 	if !strings.Contains(m.Body(120, 20), "compiling") {
 		t.Error("the log text was lost when a poll failed")
+	}
+}
+
+// stampedLogs is a pane holding one task's worth of log with the timestamp
+// prefix Azure Pipelines writes on every line.
+func stampedLogs(t *testing.T, lines ...string) *Logs {
+	t.Helper()
+	m := newLogs(t, azdo.StatusSucceeded)
+	updated, _ := m.Update(logChunksMsg{
+		Status: azdo.StatusSucceeded,
+		Chunks: []azdo.LogChunk{{Task: "Build", LogID: 7, Lines: lines}},
+	})
+	return updated.(*Logs)
+}
+
+const logStamp = "2026-09-18T13:49:02.1234567Z"
+
+func TestLogsHidesTheTimestampPrefixUntilItIsAskedFor(t *testing.T) {
+	m := stampedLogs(t, logStamp+" compiling")
+
+	if view := m.Body(120, 20); strings.Contains(view, logStamp) {
+		t.Errorf("the timestamp prefix is shown by default:\n%s", view)
+	} else if !strings.Contains(view, "compiling") {
+		t.Errorf("the line's text went with its timestamp:\n%s", view)
+	}
+}
+
+func TestLogsTogglesTheTimestampPrefix(t *testing.T) {
+	m := stampedLogs(t, logStamp+" compiling")
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	m = updated.(*Logs)
+	if view := m.Body(120, 20); !strings.Contains(view, logStamp) {
+		t.Errorf("t did not show the timestamp prefix:\n%s", view)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	m = updated.(*Logs)
+	if view := m.Body(120, 20); strings.Contains(view, logStamp) {
+		t.Errorf("a second t did not hide the timestamp prefix again:\n%s", view)
+	}
+}
+
+// TestLogsKeepsTheTaskRulesAcrossAToggle — the toggle rewrites the whole
+// buffer, so the rules between one task's output and the next have to be
+// replayed rather than lost.
+func TestLogsKeepsTheTaskRulesAcrossAToggle(t *testing.T) {
+	m := newLogs(t, azdo.StatusSucceeded)
+	updated, _ := m.Update(logChunksMsg{
+		Status: azdo.StatusSucceeded,
+		Chunks: []azdo.LogChunk{
+			{Task: "Restore", LogID: 6, Lines: []string{logStamp + " restoring"}},
+			{Task: "Build", LogID: 7, Lines: []string{logStamp + " compiling"}},
+		},
+	})
+	m = updated.(*Logs)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	m = updated.(*Logs)
+
+	view := m.Body(120, 40)
+	for _, want := range []string{"── Restore ──", "── Build ──", "restoring", "compiling"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the toggle lost %q:\n%s", want, view)
+		}
+	}
+}
+
+// TestLogsKeepsItsPlaceAcrossAToggle — the toggle is for reading the log you
+// are already looking at, so it must not throw you back to the top.
+func TestLogsKeepsItsPlaceAcrossAToggle(t *testing.T) {
+	lines := make([]string, 200)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("%s line %d", logStamp, i)
+	}
+	m := stampedLogs(t, lines...)
+	m.Body(120, 10)
+
+	m.viewport.SetYOffset(120)
+	before := m.viewport.YOffset
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	m = updated.(*Logs)
+	m.Body(120, 10)
+
+	if m.viewport.YOffset != before {
+		t.Errorf("the toggle moved the pane from line %d to line %d", before, m.viewport.YOffset)
+	}
+}
+
+// TestLogsStripsTheAzureMarkers — "##[error]" is Azure Pipelines telling
+// boardwalk what the line is, not text the reader needs to see.
+func TestLogsStripsTheAzureMarkers(t *testing.T) {
+	m := stampedLogs(t,
+		logStamp+" ##[section]Starting: Build",
+		logStamp+" ##[error]Bash exited with code 1.",
+		logStamp+" ##[endgroup]",
+	)
+
+	view := m.Body(120, 20)
+	if strings.Contains(view, "##[") {
+		t.Errorf("a marker was left in the rendered log:\n%s", view)
+	}
+	for _, want := range []string{"Starting: Build", "Bash exited with code 1."} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the marker took %q with it:\n%s", want, view)
+		}
 	}
 }

@@ -243,6 +243,7 @@ says who is in that group, so boardwalk has to be told. See Setup.
 | key | |
 |---|---|
 | `g` / `G` | top / bottom |
+| `t` | show / hide timestamps |
 | `r` | refresh |
 | `y` | copy the build id |
 | `o` | open the build in the browser |
@@ -250,6 +251,13 @@ says who is in that group, so boardwalk has to be told. See Setup.
 
 A running build's logs append on their own every few seconds, and stop when the
 build finishes.
+
+Azure Pipelines marks up its own logs, and the pane reads that markup rather
+than guessing: sections and group headings stand out, commands are set apart
+from their output, warnings are amber and errors red, and `##[debug]` lines
+recede. Colour the build tools emitted themselves is left alone. The timestamp
+every line carries is hidden by default — it is the same twenty-eight columns
+on every row — and `t` brings it back when you are timing something.
 
 ## The branch flow
 
