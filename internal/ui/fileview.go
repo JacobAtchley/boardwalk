@@ -8,6 +8,7 @@ import (
 	"github.com/aymanbagabas/go-udiff"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -59,8 +60,40 @@ type FileView struct {
 	renderedDiff bool
 	rendered     bool
 
+	// commentPrompt is non-nil while a review comment is being typed. It is
+	// the view's only modal state, and it owns every key while it is open —
+	// "d" typed into it is a letter, not the diff toggle.
+	commentPrompt *textinput.Model
+	// commentLine is the line the open prompt will post against, captured
+	// when it opened rather than read back from the cursor afterwards: the
+	// cursor cannot be asked again once the post's round trip returns.
+	commentLine int
+
 	status string
 	failed bool
+}
+
+// threadCreatedMsg carries the outcome of writing a review comment. It names
+// the pull request and the file because Root broadcasts to every view in the
+// stack, and two file views can be open at once by way of a linked pull
+// request.
+type threadCreatedMsg struct {
+	PR     int
+	Path   string
+	Thread azdo.Thread
+	Err    error
+}
+
+// createThreadCmd posts a review comment off the UI goroutine.
+func createThreadCmd(c *azdo.Client, pr azdo.PullRequest, path string, line int, text string) tea.Cmd {
+	return func() tea.Msg {
+		thread, err := c.CreateThread(pr.RepoID, pr.ID, path, line, text)
+		if err != nil {
+			return threadCreatedMsg{PR: pr.ID, Path: path,
+				Err: fmt.Errorf("could not post the comment: %w", err)}
+		}
+		return threadCreatedMsg{PR: pr.ID, Path: path, Thread: thread}
+	}
 }
 
 // NewFileView builds the view over content the diff pane has already
@@ -87,7 +120,49 @@ func (m *FileView) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.status, m.failed = msg.Text, msg.Err
 		return m, nil
 
+	case threadCreatedMsg:
+		if msg.PR != m.pr.ID || msg.Path != m.path {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.status, m.failed = msg.Err.Error(), true
+			return m, nil
+		}
+		// Added to what is already held rather than refetched: the thread
+		// the server just made is known, and waiting for a round trip to see
+		// your own comment reads as the comment having failed.
+		m.threads = append(m.threads, msg.Thread)
+		m.status, m.failed = "comment posted", false
+		m.invalidate()
+		return m, nil
+
 	case tea.KeyMsg:
+		// The prompt owns every key while it is open, including the letters
+		// that are otherwise actions. Mirrors the branch prompt in
+		// workitems.go and the reply prompt in pullrequestdetail.go.
+		if m.commentPrompt != nil {
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.commentPrompt = nil
+				m.status, m.failed = "", false
+				return m, nil
+			case tea.KeyEnter:
+				text := strings.TrimSpace(m.commentPrompt.Value())
+				line := m.commentLine
+				m.commentPrompt = nil
+				if text == "" {
+					// An empty prompt closed with enter is a mistake, not a
+					// request to post nothing.
+					return m, nil
+				}
+				m.status, m.failed = fmt.Sprintf("posting the comment on line %d…", line), false
+				return m, createThreadCmd(m.client, m.pr, m.path, line, text)
+			}
+			input, cmd := m.commentPrompt.Update(msg)
+			m.commentPrompt = &input
+			return m, cmd
+		}
+
 		switch {
 		case key.Matches(msg, keyBack), key.Matches(msg, keyQuit):
 			return m, func() tea.Msg { return PopMsg{} }
@@ -104,6 +179,24 @@ func (m *FileView) Update(msg tea.Msg) (View, tea.Cmd) {
 		case key.Matches(msg, keyLineUp):
 			m.moveCursor(-1)
 			return m, nil
+		case key.Matches(msg, keyComment):
+			line, ok := m.anchorLine()
+			if !ok {
+				// Knowable without asking: a removed line is not in the new
+				// file, so there is nothing for the server to anchor to.
+				// Refused here rather than at the network call, which would
+				// hide the reason behind an error code — the precedent
+				// armDraft sets.
+				m.status, m.failed = "that line was removed by this pull request, so a comment has nothing to attach to", true
+				return m, nil
+			}
+			input := textinput.New()
+			input.Prompt = fmt.Sprintf("comment on line %d: ", line)
+			input.Focus()
+			m.commentPrompt, m.commentLine = &input, line
+			m.status, m.failed = "", false
+			return m, textinput.Blink
+
 		case key.Matches(msg, keyTop):
 			m.cursor = 0
 			m.invalidate()
@@ -273,9 +366,9 @@ func (m *FileView) Title() string {
 }
 
 func (m *FileView) Keys() help.KeyMap {
-	own := []key.Binding{keyFileDiff, keyLineUp, keyLineDown, keyTop, keyBottom}
+	own := []key.Binding{keyComment, keyFileDiff, keyLineUp, keyLineDown, keyTop, keyBottom}
 	return keyMap{
-		short:  []key.Binding{keyFileDiff, keyBack, keyHelp},
+		short:  []key.Binding{keyComment, keyFileDiff, keyBack, keyHelp},
 		groups: [][]key.Binding{own, {keyCopyID, keyOpen}, navBindings()},
 	}
 }
@@ -283,6 +376,9 @@ func (m *FileView) Keys() help.KeyMap {
 // Status names the line the cursor is on, which is the one a review comment
 // would be written against. It is the only thing on screen that says so.
 func (m *FileView) Status() (string, bool) {
+	if m.commentPrompt != nil {
+		return m.commentPrompt.View(), false
+	}
 	if m.status != "" {
 		return m.status, m.failed
 	}
@@ -292,5 +388,6 @@ func (m *FileView) Status() (string, bool) {
 	return chromeStyle.Render("removed line"), false
 }
 
-// Prompting is false: this view has no modal state of its own yet.
-func (m *FileView) Prompting() bool { return false }
+// Prompting reports whether the comment prompt is open, so Root leaves esc
+// to it rather than treating it as navigation.
+func (m *FileView) Prompting() bool { return m.commentPrompt != nil }
