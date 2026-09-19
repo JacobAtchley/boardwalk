@@ -279,6 +279,12 @@ state change or the link then fails, since the branch is there either way. If
 the clipboard command is missing or refuses, the command goes on the status
 line to be read off instead.
 
+The repository is usually the one you are standing in: boardwalk reads the
+`origin` remote and matches it against the project's repositories. Run it
+somewhere else — outside a checkout, or in a repository belonging to somewhere
+else — and it asks instead, one repository at a time on the status line, `j`
+and `k` to move and `enter` to pick.
+
 ## Notes from building it
 
 **`az boards query` caps at 1000 work items.** Going through the REST API
@@ -305,7 +311,6 @@ tailing a live build.
 
 Features:
 
-- A repository picker for the branch flow, for running boardwalk outside a repo
 - Search inside the log pane
 - Pull request creation from a work item's branch
 - Caching views in the menu, so re-entering one does not refetch the project
