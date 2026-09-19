@@ -16,6 +16,7 @@ shell.
 ▸ work items       browse, branch and set state
   pull requests    drafts, branches, comments and age
   builds           pipeline runs, current step and logs
+  status           what boardwalk resolved about this session
 
 acme/Platform · ↑↓ move · enter open · q quit
 ```
@@ -251,6 +252,32 @@ name written there is honoured whatever Graph did or did not find, and is the
 only source at all if your token cannot read your organisation's Graph. A
 tenant where it is locked down behaves exactly as boardwalk did before. See
 Setup.
+
+### Session
+
+| key | |
+|---|---|
+| `r` | resolve it all again |
+
+`session` on the menu — or `boardwalk status` — shows what boardwalk worked
+out at startup: the organisation and project, which config file it read, who
+`az` says you are, the identity GUID it votes with, and every review group the
+Graph API resolved you into, alongside whatever `reviewGroups` adds.
+
+It is there because all of that used to be invisible and several parts of it
+fail quietly. A token that cannot read the Graph API, an `az account show`
+that named no user, a working directory that is not one of the project's
+repositories — each leaves boardwalk running and apparently fine, and each
+turns up somewhere else as a list with nothing in it.
+
+So the screen says what each gap costs, not just that it exists: an unknown
+user reads as "nothing reads as yours — the mine scope is empty and `v`
+matches no pull request at all". It also tells "you are in no groups" apart
+from "your groups could not be resolved", which look identical everywhere
+else in the program.
+
+`r` re-runs both lookups, so an `az login` renewed in another shell is picked
+up without restarting.
 
 ### Builds
 

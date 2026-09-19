@@ -231,3 +231,73 @@ func TestGraphRootIsTheIdentityHost(t *testing.T) {
 		t.Errorf("graphRoot() = %q, want the identity host", got)
 	}
 }
+
+// TestGroupsAreReportedWithWhyTheyAreMissing — every one of these is a
+// swallowed error today, and each of them looks from the outside like "you
+// are in no groups". The session view exists to tell them apart, which it can
+// only do if the client keeps the reason.
+func TestGroupsAreReportedWithWhyTheyAreMissing(t *testing.T) {
+	c := graphClient(t, &graphFixture{
+		myDescriptor: "aad.me",
+		memberships:  map[string][]string{"aad.me": {"vssgp.devs"}},
+		groups:       map[string]graphGroupFixture{"vssgp.devs": {"platform-devs", "guid-devs"}},
+	})
+	c.loadMyGroups()
+
+	if !c.GroupsResolved() {
+		t.Fatalf("a successful walk did not report as resolved: %v", c.GroupsError())
+	}
+	if err := c.GroupsError(); err != nil {
+		t.Errorf("GroupsError() = %v on a successful walk, want none", err)
+	}
+	if got := c.ResolvedGroups(); !got.IDs["guid-devs"] {
+		t.Errorf("ResolvedGroups() = %+v, want the group the walk found", got)
+	}
+}
+
+func TestGroupsKeepTheReasonTheWalkFailed(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"message":"the token is not scoped for Graph"}`)
+	})
+	c.MyID = "me-guid"
+	c.loadMyGroups()
+
+	if c.GroupsResolved() {
+		t.Fatal("a failed walk reported as resolved")
+	}
+	err := c.GroupsError()
+	if err == nil {
+		t.Fatal("the reason the walk failed was discarded")
+	}
+	if !strings.Contains(err.Error(), "not scoped for Graph") {
+		t.Errorf("GroupsError() = %v, want the server's own message in it", err)
+	}
+}
+
+// TestIdentityErrorIsKept — the same argument for connectionData: without
+// MyID a group vote cannot be cast, and the reason belongs on screen rather
+// than in a discarded return value.
+func TestIdentityErrorIsKept(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"message":"TF400813: the user is not authorized"}`)
+	})
+
+	_ = c.loadMyID()
+	if err := c.IdentityError(); err == nil || !strings.Contains(err.Error(), "TF400813") {
+		t.Errorf("IdentityError() = %v, want the reason connectionData failed", err)
+	}
+}
+
+func TestIdentityErrorIsClearedBySuccess(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"authenticatedUser":{"id":"me-guid"}}`)
+	})
+	c.idErr = fmt.Errorf("a previous attempt failed")
+
+	_ = c.loadMyID()
+	if err := c.IdentityError(); err != nil {
+		t.Errorf("IdentityError() = %v after a successful retry, want none", err)
+	}
+}

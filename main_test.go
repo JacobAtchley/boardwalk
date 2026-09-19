@@ -86,3 +86,16 @@ func TestParseCommandLineAcceptsTheDocumentedOrderings(t *testing.T) {
 		}
 	}
 }
+
+// TestStatusIsASubcommand — the session view is the thing you reach for when
+// boardwalk is behaving oddly, and making somebody navigate a menu to get at
+// a diagnostic is the wrong way round.
+func TestStatusIsASubcommand(t *testing.T) {
+	f, err := parseCommandLine([]string{"status"})
+	if err != nil {
+		t.Fatalf("parseCommandLine([status]) returned %v", err)
+	}
+	if f.start != "status" {
+		t.Errorf("start = %q, want the session view", f.start)
+	}
+}

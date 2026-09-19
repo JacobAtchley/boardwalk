@@ -59,6 +59,14 @@ type Client struct {
 	// is worth mentioning.
 	groups       Groups
 	groupsLoaded bool
+	// groupsErr and idErr are why the two startup lookups did not happen,
+	// kept rather than discarded. Both failures are survivable and neither
+	// is worth stopping for — but both look from the outside like "you are
+	// in no groups" and "you cannot vote", which is the same thing an
+	// ordinary, correct session looks like. The session view exists to tell
+	// those apart, and it can only do that if the reason is still here.
+	groupsErr error
+	idErr     error
 
 	token string
 	http  *http.Client
@@ -116,10 +124,78 @@ func NewClient(org, project string) (*Client, error) {
 func (c *Client) loadMyGroups() {
 	groups, err := c.MyGroups()
 	if err != nil {
+		c.groupsErr = err
 		return
 	}
-	c.groups, c.groupsLoaded = groups, true
+	c.groups, c.groupsLoaded, c.groupsErr = groups, true, nil
 }
+
+// Session is everything boardwalk worked out about this session at startup,
+// gathered into one value.
+//
+// It exists so that the view showing it can be handed data rather than a
+// client: the interesting states are the broken ones — no user name, a Graph
+// that refused — and reaching those through a live client would mean either a
+// fake server per case or test-only setters on Client. A struct literal says
+// the same thing in one line and keeps the test scaffolding out of the
+// production type.
+type Session struct {
+	Org, Project string
+	// Me is the signed-in user's email, empty when az could not name one.
+	Me string
+	// MyID is the identity GUID, empty when connectionData could not be
+	// reached; IdentityErr is why.
+	MyID        string
+	IdentityErr error
+	// Groups is what the Graph walk resolved and GroupsResolved whether it
+	// got that far; GroupsErr is why it did not. All three, because an empty
+	// Groups means nothing on its own.
+	Groups         Groups
+	GroupsResolved bool
+	GroupsErr      error
+	// ReviewGroups is what the config file named, which is honoured on top
+	// of whatever Graph found.
+	ReviewGroups []string
+}
+
+// Session gathers what this client knows about itself.
+func (c *Client) Session() Session {
+	return Session{
+		Org:            c.Org,
+		Project:        c.Project,
+		Me:             c.Me,
+		MyID:           c.MyID,
+		IdentityErr:    c.idErr,
+		Groups:         c.groups,
+		GroupsResolved: c.groupsLoaded,
+		GroupsErr:      c.groupsErr,
+		ReviewGroups:   c.ReviewGroups,
+	}
+}
+
+// Resolve re-runs the two startup lookups and reports what they found. It is
+// what the session view's refresh calls: a stale `az login` renewed in
+// another shell should not need boardwalk restarted to be picked up.
+func (c *Client) Resolve() Session {
+	_ = c.loadMyID()
+	c.loadMyGroups()
+	return c.Session()
+}
+
+// ResolvedGroups is what the Graph walk found, for the session view to show.
+func (c *Client) ResolvedGroups() Groups { return c.groups }
+
+// GroupsResolved reports whether the walk got as far as an answer. An empty
+// Groups is ambiguous on its own: somebody in no groups and a Graph that
+// refused look identical.
+func (c *Client) GroupsResolved() bool { return c.groupsLoaded }
+
+// GroupsError is why the walk did not finish, or nil.
+func (c *Client) GroupsError() error { return c.groupsErr }
+
+// IdentityError is why connectionData did not name an authenticated user, or
+// nil. Without one there is no id to cast a group's vote under.
+func (c *Client) IdentityError() error { return c.idErr }
 
 // loadMyID fetches the signed-in user's identity GUID.
 //
@@ -137,13 +213,15 @@ func (c *Client) loadMyID() error {
 		} `json:"authenticatedUser"`
 	}
 	if err := c.get(endpoint, &body); err != nil {
+		c.idErr = err
 		return err
 	}
 	if body.AuthenticatedUser.ID == "" {
-		return fmt.Errorf("connectionData named no authenticated user")
+		c.idErr = fmt.Errorf("connectionData named no authenticated user")
+		return c.idErr
 	}
 
-	c.MyID = body.AuthenticatedUser.ID
+	c.MyID, c.idErr = body.AuthenticatedUser.ID, nil
 	return nil
 }
 
