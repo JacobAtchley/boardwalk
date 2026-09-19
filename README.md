@@ -219,6 +219,7 @@ own right and leaves the group entry alone, exactly as the web UI does.
 |---|---|
 | `D` | from a pull request, open its diff |
 | `^u` / `^d` | scroll the file's diff |
+| `enter` | open the whole file |
 
 The changed files are the list and the selected file's diff is the pane beside
 it, as a unified diff: additions green, deletions red, three lines of context.
@@ -228,6 +229,13 @@ touching two hundred files still opens at once.
 A binary file, or one over 256 KiB, says what it is instead of being rendered.
 A renamed file reads as a new one: the change entry names only where the file
 landed, so its previous content is at a path boardwalk cannot ask for.
+
+`enter` opens the selected file whole — the change marked in the gutter
+rather than colouring the code, so it reads as source. `d` takes the marks
+away and leaves the file. Syntax highlighting comes from the file's name, and
+a language boardwalk has no lexer for is shown plainly rather than guessed
+at. Lines the pull request removed sit where they were, dimmed, and go away
+with `d`.
 
 Review comments sit under the line they were written against, marked resolved
 or unresolved, and a file with discussion on it carries the count in the list
@@ -252,6 +260,14 @@ name written there is honoured whatever was or was not resolved, and is the
 only source at all if your token cannot read your organisation's identities.
 A tenant where that is locked down behaves exactly as boardwalk did before
 any of this. See Setup.
+
+### File
+
+| key | |
+|---|---|
+| `j` / `k` | move the line cursor |
+| `g` / `G` | top / bottom |
+| `d` | show / hide the change marks |
 
 ### Session
 
