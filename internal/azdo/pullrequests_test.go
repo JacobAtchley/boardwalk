@@ -524,3 +524,81 @@ func TestThreadsForFileGroupsByPath(t *testing.T) {
 		t.Error("a file with no discussion matched something")
 	}
 }
+
+func TestCreateThreadAnchorsToTheLine(t *testing.T) {
+	var gotMethod, gotPath, gotBody string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotMethod, gotPath, gotBody = r.Method, r.URL.Path, string(body)
+		w.Write([]byte(`{"id":77,"status":"active","threadContext":{"filePath":"/internal/ui/tail.go",
+			"rightFileStart":{"line":42}},
+			"comments":[{"id":1,"content":"this still races","commentType":"text",
+			"author":{"displayName":"Dev Example"}}]}`))
+	})
+
+	thread, err := c.CreateThread("repo-1", 512, "/internal/ui/tail.go", 42, "this still races")
+	if err != nil {
+		t.Fatalf("CreateThread returned %v", err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %s, want POST", gotMethod)
+	}
+	if want := "/acme/Platform/_apis/git/repositories/repo-1/pullRequests/512/threads"; gotPath != want {
+		t.Errorf("path = %s, want %s", gotPath, want)
+	}
+	for _, want := range []string{
+		`"filePath":"/internal/ui/tail.go"`,
+		`"rightFileStart"`,
+		`"rightFileEnd"`,
+		`"line":42`,
+		`"this still races"`,
+	} {
+		if !strings.Contains(gotBody, want) {
+			t.Errorf("body is missing %s:\n%s", want, gotBody)
+		}
+	}
+
+	// The created thread comes back so the view can show it without
+	// refetching the whole discussion.
+	if thread.ID != 77 {
+		t.Errorf("thread id = %d, want the one the server made", thread.ID)
+	}
+	if thread.Line != 42 || !thread.RightSide {
+		t.Errorf("thread anchored at line %d right=%v, want 42 on the new side", thread.Line, thread.RightSide)
+	}
+	if len(thread.Comments) != 1 || thread.Comments[0].Text != "this still races" {
+		t.Errorf("thread comments = %+v, want the one just written", thread.Comments)
+	}
+}
+
+// TestCreateThreadSendsAnOffset — Azure DevOps positions a comment by line
+// and column, and a context with no offset is rejected as incomplete rather
+// than defaulted.
+func TestCreateThreadSendsAnOffset(t *testing.T) {
+	var gotBody string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Write([]byte(`{"id":1,"comments":[{"id":1,"content":"x","commentType":"text"}]}`))
+	})
+
+	if _, err := c.CreateThread("repo-1", 512, "/a.go", 7, "x"); err != nil {
+		t.Fatalf("CreateThread returned %v", err)
+	}
+	if !strings.Contains(gotBody, `"offset"`) {
+		t.Errorf("body carries no offset:\n%s", gotBody)
+	}
+}
+
+func TestCreateThreadReportsTheServersRefusal(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"message":"the line is outside the file's changes"}`))
+	})
+
+	if _, err := c.CreateThread("repo-1", 512, "/a.go", 9000, "x"); err == nil {
+		t.Fatal("CreateThread reported success on a rejection")
+	} else if !strings.Contains(err.Error(), "outside the file's changes") {
+		t.Errorf("error = %v, want the server's own message in it", err)
+	}
+}

@@ -237,6 +237,12 @@ a language boardwalk has no lexer for is shown plainly rather than guessed
 at. Lines the pull request removed sit where they were, dimmed, and go away
 with `d`.
 
+`c` writes a review comment against the line the cursor is on, and it appears
+under that line as soon as the server takes it. A line the pull request
+removed is not in the file any more, so there is nothing to attach a comment
+to and `c` says so rather than failing at the request. Replying to an
+existing thread and resolving one stay on the pull request pane behind `esc`.
+
 Review comments sit under the line they were written against, marked resolved
 or unresolved, and a file with discussion on it carries the count in the list
 beside its name. A comment whose line the diff's three lines of context never
@@ -266,6 +272,7 @@ any of this. See Setup.
 | key | |
 |---|---|
 | `j` / `k` | move the line cursor |
+| `c` | comment on the line under the cursor |
 | `g` / `G` | top / bottom |
 | `d` | show / hide the change marks |
 
@@ -392,6 +399,13 @@ That is why review groups are resolved through the Identities API
 against, the Graph walk resolved 35 groups and not one of the ones actually
 used as pull request reviewers; the identity expansion returns all 74. It is
 also five requests at startup rather than about seventy.
+
+**A CRLF file leaves a carriage return on every line.** Splitting a file on
+`\n` keeps the `\r`, and a terminal reading one returns the cursor to column
+zero — so the padding written after the text would overwrite the text.
+Bubbles strips control characters before it paints, which made this invisible
+rather than broken, but the pane's correctness should not rest on that. The
+file view drops the carriage return where it splits the lines.
 
 **The build log's `startLine` parameter is undocumented as 0- or 1-based.**
 Azure DevOps's reference calls it only "the start line." boardwalk treats it

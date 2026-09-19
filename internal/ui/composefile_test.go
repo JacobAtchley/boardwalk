@@ -188,3 +188,33 @@ func TestComposeFileNumbersEveryNewLine(t *testing.T) {
 		t.Errorf("%d rows belong to the new file, want 4", n)
 	}
 }
+
+// TestComposeFileDropsCarriageReturns — a CRLF file is ordinary in a Windows
+// shop, and this organisation's repositories are full of them.
+//
+// The carriage return is not part of the line. Left on, it ends up in
+// fileLine.Text, and a terminal reading one returns the cursor to column
+// zero — so the padding the viewport writes after the text would overwrite
+// the text. Bubbles happens to strip control characters before it paints,
+// which is why this is invisible rather than broken, but the correctness of
+// the pane should not rest on that.
+func TestComposeFileDropsCarriageReturns(t *testing.T) {
+	text := "# Introduction \r\nsecond line\r\n"
+	hunks := []*udiff.Hunk{hunk(1, 1,
+		line(udiff.Delete, "# Old heading \r\n"),
+		line(udiff.Insert, "# Introduction \r\n"),
+	)}
+
+	for _, l := range composeFile(text, hunks) {
+		if strings.ContainsRune(l.Text, '\r') {
+			t.Errorf("line %+v kept its carriage return", l)
+		}
+	}
+	got := composeFile(text, hunks)
+	if got[0].Text != "# Old heading " {
+		t.Errorf("removed line = %q, want the text without the carriage return", got[0].Text)
+	}
+	if got[1].Text != "# Introduction " {
+		t.Errorf("added line = %q, want the text without the carriage return", got[1].Text)
+	}
+}
