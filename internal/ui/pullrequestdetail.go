@@ -515,7 +515,10 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 				m.status, m.failed = "Azure DevOps has not computed this pull request's merge yet, so there is nothing to diff", false
 				return m, nil
 			}
-			diff := NewPullRequestDiff(m.client, m.pr)
+			// The discussion goes with it: this view has already fetched it,
+			// and the diff pane shows each comment against the line it was
+			// written on rather than fetching the same threads again.
+			diff := NewPullRequestDiff(m.client, m.pr, m.threads)
 			return m, func() tea.Msg { return PushMsg{View: diff} }
 		case key.Matches(msg, keyLinkedItem):
 			if len(m.linked) == 0 {
@@ -693,7 +696,13 @@ func (m *PullRequestDetail) renderThread(b *strings.Builder, t azdo.Thread, sele
 
 	head := marker
 	if t.File != "" {
-		head += chromeStyle.Render("  " + truncate(t.File, max(10, width-20)))
+		// The line as well as the file: "logs.go:42" is where the reader
+		// would go looking, and the file alone leaves them to find it.
+		where := t.File
+		if t.Line > 0 {
+			where = fmt.Sprintf("%s:%d", t.File, t.Line)
+		}
+		head += chromeStyle.Render("  " + truncate(where, max(10, width-20)))
 	}
 	if selected {
 		// c and R always act on the first unresolved thread — the same

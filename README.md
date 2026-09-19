@@ -228,6 +228,13 @@ A binary file, or one over 256 KiB, says what it is instead of being rendered.
 A renamed file reads as a new one: the change entry names only where the file
 landed, so its previous content is at a path boardwalk cannot ask for.
 
+Review comments sit under the line they were written against, marked resolved
+or unresolved, and a file with discussion on it carries the count in the list
+beside its name. A comment whose line the diff's three lines of context never
+reach — or one written against the file rather than a line of it — is
+collected under "elsewhere in this file" rather than dropped. Replying and
+resolving stay on the detail pane behind `esc`; this one is for reading.
+
 Between them those two close the loop `b` opens: branch from a work item, and
 the work item knows about the pull request that branch became, and the pull
 request knows which work item it belongs to.
@@ -250,6 +257,21 @@ Setup.
 | key | |
 |---|---|
 | `enter` | open the logs |
+| `p` | the pull request this run built |
+| `Q` | re-run — this pipeline, this branch |
+| `N` | new run — asks which branch |
+| `C` | cancel a run that has not finished |
+
+`Q` and `C` arm on the first press and fire on the second, the way the draft
+toggle does: they start and stop work on a shared build pool, and a stray
+keystroke cannot be taken back by pressing the key again. `esc` disarms, and
+pressing the other one re-arms to that instead. `N` asks for a branch first,
+prefilled with the selected run's, and that prompt is the deliberate act the
+arm would otherwise be.
+
+Capitals because the lower-case letters are taken in views reachable from
+here: `r` refreshes everywhere, `c` replies on a pull request the build list
+links to.
 
 ### Logs
 
@@ -292,6 +314,12 @@ state change or the link then fails, since the branch is there either way. If
 the clipboard command is missing or refuses, the command goes on the status
 line to be read off instead.
 
+The repository is usually the one you are standing in: boardwalk reads the
+`origin` remote and matches it against the project's repositories. Run it
+somewhere else — outside a checkout, or in a repository belonging to somewhere
+else — and it asks instead, one repository at a time on the status line, `j`
+and `k` to move and `enter` to pick.
+
 ## Notes from building it
 
 **`az boards query` caps at 1000 work items.** Going through the REST API
@@ -318,15 +346,11 @@ tailing a live build.
 
 Features:
 
-- A repository picker for the branch flow, for running boardwalk outside a repo
 - Search inside the log pane
 - Pull request creation from a work item's branch
 - Caching views in the menu, so re-entering one does not refetch the project
-- Queue, re-run and cancel a build from the builds view
 - `--json` output, so a dump can be piped into something else
 - A watch mode that polls for pull requests newly waiting on you
-- Anchoring a review thread to the diff line it was written against, which
-  `Thread.File` already carries enough information to do
 
 Known rough edges, none of them load-bearing:
 

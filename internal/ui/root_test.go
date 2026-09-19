@@ -317,7 +317,7 @@ func TestRootBroadcastsErrMsgToTheViewItBelongsToEvenWhenNotOnTop(t *testing.T) 
 
 	updated, _ = r.Update(PushMsg{View: NewPullRequestDetail(c, prs[0], []azdo.Thread{})})
 	r = updated.(*Root)
-	diff := NewPullRequestDiff(c, prs[0])
+	diff := NewPullRequestDiff(c, prs[0], nil)
 	updated, _ = r.Update(PushMsg{View: diff})
 	r = updated.(*Root)
 
