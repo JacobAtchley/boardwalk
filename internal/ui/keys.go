@@ -79,6 +79,23 @@ var (
 	keyQueue       = key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "new run"))
 	keyCancelBuild = key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "cancel run"))
 
+	// keyFileDiff toggles the change marks in the file view off, leaving the
+	// file and its highlighting. "d" is the drafts filter on the pull request
+	// list, which is two views further up — keyDiff's objection is to a key
+	// meaning one thing on a list and another on the pane that list opens,
+	// and this is not that pane.
+	// keyFileOpen opens the selected file whole, from the diff pane's list.
+	// enter is free there and means "open this" on every other list in the
+	// program.
+	keyFileOpen = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open the file"))
+	keyFileDiff = key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "diff marks"))
+	// keyLineUp and keyLineDown move the file view's line cursor. The list
+	// views read the same keys straight off msg.String(); this one is
+	// matched through a binding because the cursor it moves is what a review
+	// comment anchors to, and the help panel has to name it.
+	keyLineUp   = key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "line up"))
+	keyLineDown = key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "line down"))
+
 	keyApprove = key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "approve"))
 	keyWait    = key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "wait for author"))
 	keyReject  = key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "reject"))

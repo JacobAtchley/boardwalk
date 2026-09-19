@@ -150,6 +150,11 @@ func hasNewSide(changeType string) bool { return !isChange(changeType, "delete")
 // the one line explaining why there are none.
 type fileDiff struct {
 	hunks []*udiff.Hunk
+	// text is the side of the file the file view shows: the new one, or the
+	// old one for a file the pull request deleted. It is kept rather than
+	// discarded because buildFileDiff has already read it to produce the
+	// hunks, so the file view costs no request of its own.
+	text string
 	// note says why a file is shown as a sentence rather than as a diff —
 	// binary, or past the size cap.
 	note string
@@ -345,6 +350,13 @@ func buildFileDiff(c *azdo.Client, repoID, path, changeType, oldSHA, newSHA stri
 		return fileDiff{note: note}
 	}
 
+	// The new side, or the old one when there is no new side — a deleted
+	// file is still worth opening, and every line of it reads as removed.
+	text := after
+	if text == "" {
+		text = before
+	}
+
 	// Lines rather than Strings: Strings diffs runes and only then widens the
 	// edits to line boundaries, which reports a line whose neighbour changed as
 	// removed and re-added. On a review diff that is noise — the reader has to
@@ -355,7 +367,7 @@ func buildFileDiff(c *azdo.Client, repoID, path, changeType, oldSHA, newSHA stri
 	if err != nil {
 		return fileDiff{err: fmt.Sprintf("could not diff the file: %v", err)}
 	}
-	return fileDiff{hunks: unified.Hunks}
+	return fileDiff{hunks: unified.Hunks, text: text}
 }
 
 // unrenderable reports why a file will not be shown as a diff, or "" when it
@@ -465,6 +477,30 @@ func (m *PullRequestDiff) Update(msg tea.Msg) (View, tea.Cmd) {
 				m.status, m.failed = status.Text, status.Err
 				return m, nil
 			}
+		}
+
+		if key.Matches(msg, keyFileOpen) {
+			path, ok := m.selectedPath()
+			if !ok {
+				return m, nil
+			}
+			d, known := m.diffs[path]
+			switch {
+			case !known:
+				// Pushing now would put an empty pane over the list with
+				// nothing on it to say the content is still coming.
+				m.status, m.failed = "still reading the file…", false
+				return m, nil
+			case d.err != "":
+				m.status, m.failed = d.err, true
+				return m, nil
+			case d.note != "":
+				// Binary, or past the size cap. The note already says which.
+				m.status, m.failed = d.note, false
+				return m, nil
+			}
+			file := NewFileView(m.client, m.pr, path, d.text, d.hunks, m.threads)
+			return m, func() tea.Msg { return PushMsg{View: file} }
 		}
 
 		if key.Matches(msg, keyRefresh) {
