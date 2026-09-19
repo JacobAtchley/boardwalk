@@ -45,6 +45,18 @@ type assigneeSetMsg struct {
 	Err         error
 }
 
+// reposFetchedMsg carries the project's repositories, fetched once a branch
+// name has been typed. It names the work item and the branch it was fetched
+// for: Root broadcasts data to every view in the stack, and the answer has to
+// carry the flow it belongs to because nothing else on the receiving side
+// still holds it.
+type reposFetchedMsg struct {
+	ID     int
+	Branch string
+	Repos  []azdo.Repo
+	Err    error
+}
+
 // pickRepo finds the repository the working directory belongs to among the
 // project's repositories.
 func pickRepo(repos []azdo.Repo, want string) (azdo.Repo, bool) {
@@ -94,20 +106,25 @@ func runBranchFlow(c *azdo.Client, id int, branch string, repo azdo.Repo) Branch
 	return res
 }
 
-// branchCmd runs the flow off the UI goroutine, resolving the repository first.
-func branchCmd(c *azdo.Client, id int, branch string) tea.Cmd {
+// reposCmd lists the project's repositories, off the UI goroutine. It is the
+// first half of the branch flow: the view decides from the answer whether the
+// working directory settles the question or the picker has to ask.
+//
+// The repository used to be resolved inside the flow's own command, which
+// meant a working directory that was not one of the project's repositories
+// could only be reported as a failure — there was nowhere left to ask. The
+// fetch is separated from the flow so that there is.
+func reposCmd(c *azdo.Client, id int, branch string) tea.Cmd {
 	return func() tea.Msg {
 		repos, err := c.Repos()
-		if err != nil {
-			return branchDoneMsg{BranchResult{Branch: branch, Err: err}}
-		}
+		return reposFetchedMsg{ID: id, Branch: branch, Repos: repos, Err: err}
+	}
+}
 
-		repo, ok := pickRepo(repos, azdo.CurrentRepo())
-		if !ok {
-			return branchDoneMsg{BranchResult{Branch: branch, Err: fmt.Errorf(
-				"run boardwalk inside one of the project's repositories, or create the branch there — "+
-					"the working directory is not an Azure DevOps repository in %s", c.Project)}}
-		}
+// branchCmd runs the flow off the UI goroutine against a repository already
+// decided on.
+func branchCmd(c *azdo.Client, id int, branch string, repo azdo.Repo) tea.Cmd {
+	return func() tea.Msg {
 		return branchDoneMsg{runBranchFlow(c, id, branch, repo)}
 	}
 }

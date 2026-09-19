@@ -71,6 +71,20 @@ type WorkItems struct {
 	// branchPrompt are never both set: each one's key (b, S) only reaches the
 	// switch below once neither modal state has already claimed the keyboard.
 	statePicker *statePicker
+
+	// repoPicker is non-nil while the branch flow is asking which repository
+	// to create the branch in. It is the third modal state, and it cannot
+	// overlap either of the others: it opens only once the branch prompt has
+	// closed and a fetch has come back, and while it is up it swallows every
+	// key, so nothing can reach the keys that would open the other two.
+	repoPicker *repoPicker
+
+	// currentRepo names the Azure DevOps repository the working directory
+	// belongs to. It is a field rather than a direct call to
+	// azdo.CurrentRepo so a test can say where it is standing — the real one
+	// shells out to git and answers whatever the machine running the test
+	// happens to be checked out into.
+	currentRepo func() string
 }
 
 // NewWorkItems builds the work item browser. items may be empty, which means
@@ -86,6 +100,7 @@ func NewWorkItems(c *azdo.Client, items []azdo.WorkItem, mineOnly, includeClosed
 		includeClosed: includeClosed,
 		work:          newWork(),
 		now:           time.Now,
+		currentRepo:   azdo.CurrentRepo,
 	}
 
 	m.browser.Detail = m.renderDetail
@@ -181,6 +196,9 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.status, m.failed = msg.Text, msg.Err
 		return m, nil
 
+	case reposFetchedMsg:
+		return m, m.resolveRepo(msg)
+
 	case branchDoneMsg:
 		// The state change is real on the server whenever it landed, even if
 		// a later step (the link) then failed — so the row is synced off the
@@ -261,12 +279,35 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 				if !ok || branch == "" {
 					return m, nil
 				}
-				m.status, m.failed = "creating "+branch+"…", false
-				return m, branchCmd(m.client, it.ID, branch)
+				m.status, m.failed = "finding the repository…", false
+				return m, reposCmd(m.client, it.ID, branch)
 			}
 			input, cmd := m.branchPrompt.Update(msg)
 			m.branchPrompt = &input
 			return m, cmd
+		}
+
+		// The repository picker owns every key while it is open, the same
+		// discipline the branch prompt above uses for its own modal state.
+		if m.repoPicker != nil {
+			switch msg.String() {
+			case "esc":
+				m.repoPicker = nil
+				m.status, m.failed = "", false
+			case "enter":
+				repo, ok := m.repoPicker.selected()
+				id, branch := m.repoPicker.itemID, m.repoPicker.branch
+				m.repoPicker = nil
+				if !ok {
+					return m, nil
+				}
+				return m, m.startBranchFlow(id, branch, repo)
+			case "up", "k":
+				m.repoPicker.up()
+			case "down", "j":
+				m.repoPicker.down()
+			}
+			return m, nil
 		}
 
 		// The state picker owns every key while it is open, the same
@@ -369,6 +410,39 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 
 	cmd := m.browser.Update(msg)
 	return m, cmd
+}
+
+// resolveRepo decides what a finished repository fetch means for the branch
+// flow waiting on it: run against the repository the working directory is in,
+// or open the picker because nothing here answers that on its own.
+func (m *WorkItems) resolveRepo(msg reposFetchedMsg) tea.Cmd {
+	if msg.Err != nil {
+		m.status, m.failed = fmt.Sprintf("could not list the project's repositories: %v", msg.Err), true
+		return nil
+	}
+	if len(msg.Repos) == 0 {
+		// Not a case the picker can help with, and worth saying plainly: a
+		// project with no Git repositories is a fact about the project, not a
+		// fact about where boardwalk is running.
+		m.status, m.failed = fmt.Sprintf("%s has no Git repositories to branch in", m.client.Project), true
+		return nil
+	}
+
+	if repo, ok := pickRepo(msg.Repos, m.currentRepo()); ok {
+		return m.startBranchFlow(msg.ID, msg.Branch, repo)
+	}
+
+	m.repoPicker = newRepoPicker(msg.ID, msg.Branch, msg.Repos)
+	m.status, m.failed = "", false
+	return nil
+}
+
+// startBranchFlow kicks the flow off against a repository now settled on,
+// saying so on the status line. Both routes to a repository — the working
+// directory and the picker — end here, so both report it the same way.
+func (m *WorkItems) startBranchFlow(id int, branch string, repo azdo.Repo) tea.Cmd {
+	m.status, m.failed = fmt.Sprintf("creating %s in %s…", branch, repo.Name), false
+	return branchCmd(m.client, id, branch, repo)
 }
 
 // renderDetail is a summary, not the item. It carries what identifies a row
@@ -497,6 +571,9 @@ func (m *WorkItems) Status() (string, bool) {
 	if m.statePicker != nil {
 		return m.statePicker.View(), false
 	}
+	if m.repoPicker != nil {
+		return m.repoPicker.View(), false
+	}
 	if m.browser.Filtering() {
 		return m.browser.FilterView(), false
 	}
@@ -506,5 +583,6 @@ func (m *WorkItems) Status() (string, bool) {
 // Prompting reports whether a text prompt or the state picker is open, so
 // Root leaves esc and q to it rather than treating them as navigation.
 func (m *WorkItems) Prompting() bool {
-	return m.branchPrompt != nil || m.statePicker != nil || m.browser.Filtering()
+	return m.branchPrompt != nil || m.statePicker != nil || m.repoPicker != nil ||
+		m.browser.Filtering()
 }
