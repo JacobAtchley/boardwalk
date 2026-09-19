@@ -62,6 +62,13 @@ var (
 	// this is the binding the keypress is matched against.
 	keyDraftToggle = key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "publish / mark draft"))
 
+	// keyStamps toggles the timestamp Azure Pipelines writes at the head of
+	// every build log line. It is off by default: the prefix is the same 28
+	// columns on every row, and it earns its space only when you are timing
+	// something. "t" rather than a capital because ctrl+t is the only other
+	// claim on the letter and it belongs to a view this one cannot reach.
+	keyStamps = key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "timestamps"))
+
 	keyApprove = key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "approve"))
 	keyWait    = key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "wait for author"))
 	keyReject  = key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "reject"))
