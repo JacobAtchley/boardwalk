@@ -1,6 +1,9 @@
 package azdo
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 const me = "dev@acme.test"
 
@@ -255,5 +258,85 @@ func TestNeedsReviewFromWithoutAnIdentity(t *testing.T) {
 
 	if (&Client{}).NeedsReviewFrom(p) {
 		t.Error("an unknown identity matched a reviewer with no unique name")
+	}
+}
+
+// resolvedClient is a client whose Graph memberships have already come back,
+// which is the state NewClient leaves it in on a tenant where Graph is
+// readable.
+func resolvedClient(ids, names []string) *Client {
+	g := Groups{IDs: map[string]bool{}, Names: map[string]bool{}}
+	for _, id := range ids {
+		g.IDs[id] = true
+	}
+	for _, n := range names {
+		g.Names[strings.ToLower(n)] = true
+	}
+	return &Client{Me: "dev@acme.test", MyID: "me-guid", groups: g, groupsLoaded: true}
+}
+
+func groupReviewedPR(groupID, groupName string) PullRequest {
+	return PullRequest{
+		AuthorKey: "someone@acme.test",
+		Reviewers: []Reviewer{{Name: groupName, ID: groupID, IsGroup: true}},
+	}
+}
+
+// TestGraphMembershipMakesAGroupReviewMine — the point of the whole walk: a
+// group nobody wrote in a config file is still mine, because Graph says so.
+func TestGraphMembershipMakesAGroupReviewMine(t *testing.T) {
+	c := resolvedClient([]string{"guid-devs"}, []string{"platform-devs"})
+
+	if !c.NeedsReviewFrom(groupReviewedPR("guid-devs", "[Platform]\\platform-devs")) {
+		t.Error("a group Graph resolved me into was not treated as mine")
+	}
+	if c.NeedsReviewFrom(groupReviewedPR("guid-other", "[Platform]\\some-other-team")) {
+		t.Error("a group I am not in was treated as mine")
+	}
+}
+
+// TestGraphMembershipMatchesOnTheNameWhenTheIDDiffers — an Azure AD group's
+// originId is its AAD object id, which is not the GUID Azure DevOps puts on
+// the reviewer entry. The name is what bridges that, and without it a tenant
+// using AAD groups would resolve nothing while appearing to work.
+func TestGraphMembershipMatchesOnTheNameWhenTheIDDiffers(t *testing.T) {
+	c := resolvedClient([]string{"aad-object-id"}, []string{"platform-devs"})
+
+	if !c.NeedsReviewFrom(groupReviewedPR("a-different-guid", "platform-devs")) {
+		t.Error("a group whose id differs from its Graph originId was not matched by name")
+	}
+}
+
+// TestConfiguredGroupsStillWinAfterGraph — the config is the override. A name
+// written there is honoured whatever Graph did or did not resolve, which is
+// what keeps boardwalk working on a tenant where Graph is locked down.
+func TestConfiguredGroupsStillWinAfterGraph(t *testing.T) {
+	c := resolvedClient([]string{"guid-devs"}, []string{"platform-devs"})
+	c.ReviewGroups = []string{"release-managers"}
+
+	if !c.NeedsReviewFrom(groupReviewedPR("guid-release", "[Platform]\\release-managers")) {
+		t.Error("a group named in the config was not treated as mine")
+	}
+}
+
+// TestConfiguredGroupsCarryATenantWithNoGraph — Graph failed at startup, so
+// nothing was resolved. The config path has to be exactly what it was.
+func TestConfiguredGroupsCarryATenantWithNoGraph(t *testing.T) {
+	c := &Client{Me: "dev@acme.test", ReviewGroups: []string{"platform-devs"}}
+
+	if !c.NeedsReviewFrom(groupReviewedPR("guid-devs", "[Platform]\\platform-devs")) {
+		t.Error("with Graph unavailable the configured group stopped working")
+	}
+}
+
+func TestMyReviewerIDUsesAGraphResolvedGroup(t *testing.T) {
+	c := resolvedClient([]string{"guid-devs"}, []string{"platform-devs"})
+
+	id, ok := c.MyReviewerID(groupReviewedPR("guid-devs", "platform-devs"))
+	if !ok {
+		t.Fatal("no reviewer id for a group Graph resolved me into")
+	}
+	if id != "me-guid" {
+		t.Errorf("reviewer id = %q, want my own identity — a group is voted on as myself", id)
 	}
 }

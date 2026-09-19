@@ -26,14 +26,20 @@ type Config struct {
 	// Project is the team project within it.
 	Project string `json:"project"`
 
-	// ReviewGroups are the teams and security groups you belong to, named as
+	// ReviewGroups are teams and security groups to treat as yours, named as
 	// Azure DevOps displays them.
 	//
-	// A pull request can list a group as its reviewer rather than a person, and
-	// nothing in the pull request payload says who is in that group — resolving
-	// it means the Graph API, a different host, and a walk through nested
-	// memberships. Naming them here is exact, costs no requests and works
-	// offline; the price is that it goes stale when your memberships change.
+	// It is optional now. A pull request can list a group as its reviewer
+	// rather than a person, and nothing in the pull request payload says who
+	// is in that group — boardwalk resolves that itself at startup, through
+	// the Graph API, walking up from your identity through nested
+	// memberships.
+	//
+	// What is left here is the override: a name written here is honoured on
+	// top of whatever Graph found, and is the only source at all on a tenant
+	// whose Graph your token cannot read. It costs no requests and works
+	// offline; the price is the one it always had, that it goes stale when
+	// your memberships change.
 	ReviewGroups []string `json:"reviewGroups"`
 }
 

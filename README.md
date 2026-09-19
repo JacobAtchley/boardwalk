@@ -67,7 +67,7 @@ Everything boardwalk needs to know lives in one file at
 |---|---|
 | `org` | the Azure DevOps organisation — the first path segment of `https://dev.azure.com/{org}` |
 | `project` | the team project within it |
-| `reviewGroups` | teams and security groups you belong to, named as Azure DevOps displays them |
+| `reviewGroups` | optional — extra teams and security groups to treat as yours, named as Azure DevOps displays them |
 
 Azure DevOps scopes a group's display name to wherever it lives —
 `[TEAM FOUNDATION]\platform-devs` for a collection group, `[MyProject]\Team
@@ -78,13 +78,17 @@ projects can each have a `developers` and only one of them be yours.
 `org` and `project` are required; boardwalk will tell you which is missing, and
 show you the shape, if either is absent.
 
-`reviewGroups` is what lets `v` in the pull request view find work assigned to a
-group rather than to you, and what lets you vote on a pull request only a group
-of yours is reviewing. A pull request can list a group as its reviewer, and
-nothing in the pull request payload says who is in that group — resolving it
-would mean the Graph API, a second host and a walk through nested memberships.
-Naming them here costs no requests and works offline, at the price of going
-stale when your memberships change.
+`reviewGroups` is optional. What it affects is `v` in the pull request view
+finding work assigned to a group rather than to you, and your being able to
+vote on a pull request only a group of yours is reviewing — and boardwalk
+works that out for itself at startup, through the Graph API, walking up from
+your identity through however many levels of nested group it takes.
+
+Name a group here and it is honoured on top of whatever that found. That is
+worth doing in two cases: your token cannot read your organisation's Graph, so
+nothing was resolved at all; or you want a group you are not formally a member
+of to count as yours anyway. It costs no requests and works offline, at the
+price of going stale when your memberships change.
 
 Set `BOARDWALK_CONFIG` to read the file from somewhere else, which is how to
 keep more than one — a second organisation, or a project you only visit
@@ -202,7 +206,8 @@ the diff.
 
 `A` approves, `W` waits for the author and `X` rejects, each on a second press
 of the same key. They show when the pull request is yours to vote on — named
-directly, or through a group listed in `reviewGroups`. Voting on a group's
+directly, or through a group of yours, whether Graph resolved that group or
+`reviewGroups` named it. Voting on a group's
 behalf casts the vote under your own identity, which boardwalk reads once at
 startup from `connectionData`; Azure DevOps then adds you as a reviewer in your
 own right and leaves the group entry alone, exactly as the web UI does.
@@ -230,7 +235,15 @@ request knows which work item it belongs to.
 `v` matches a pull request where you are a reviewer and have not voted, and
 excludes your own. A pull request can name a group as its reviewer rather than
 a person — `platform-devs` rather than you — and nothing in the pull request
-says who is in that group, so boardwalk has to be told. See Setup.
+says who is in that group. boardwalk works that out at startup through the
+Graph API, walking up from your identity through however many levels of nested
+group it takes, so a team you were added to this morning counts this morning.
+
+`reviewGroups` in the config is still read, as an override on top of that: a
+name written there is honoured whatever Graph did or did not find, and is the
+only source at all if your token cannot read your organisation's Graph. A
+tenant where it is locked down behaves exactly as boardwalk did before. See
+Setup.
 
 ### Builds
 
@@ -312,7 +325,6 @@ Features:
 - Queue, re-run and cancel a build from the builds view
 - `--json` output, so a dump can be piped into something else
 - A watch mode that polls for pull requests newly waiting on you
-- Resolving review groups through the Graph API instead of naming them in the config
 - Anchoring a review thread to the diff line it was written against, which
   `Thread.File` already carries enough information to do
 
@@ -385,6 +397,13 @@ what Azure DevOps does with it:
   reason the check exists still holds.
 - Whether an empty `System.AssignedTo` unassigns rather than failing validation.
   Unreachable in normal use: both call sites refuse to send an empty assignee.
+- Which field of a Graph group matches the `id` a pull request puts on a group
+  reviewer. For an Azure DevOps group the group's `originId` should be it; for
+  an Azure AD group the `originId` is the AAD object id, which is a different
+  GUID from the identity Azure DevOps mints for it. `Groups.Has` therefore
+  matches on the id **or** the display name, so a tenant using AAD groups
+  resolves through the name rather than silently resolving nothing — but
+  which of the two actually fires has not been seen against a live tenant.
 
 ## License
 
