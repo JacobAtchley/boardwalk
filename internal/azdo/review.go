@@ -7,7 +7,8 @@ import "strings"
 // Waiting means they are a reviewer and have not voted. They can be a reviewer
 // twice over: named directly, or through a group the pull request lists instead
 // of its members. Nothing in the payload says who belongs to a group, so
-// Client.ReviewGroups supplies the groups to treat as theirs.
+// Client.myGroup answers that — from the Graph API where it could be reached,
+// and from Client.ReviewGroups either way.
 //
 // Their own pull requests never count: authoring one is not reviewing it.
 func (c *Client) NeedsReviewFrom(pr PullRequest) bool {
@@ -19,7 +20,7 @@ func (c *Client) NeedsReviewFrom(pr PullRequest) bool {
 	var viaGroup bool
 	for _, r := range pr.Reviewers {
 		if r.IsGroup {
-			if inGroups(r.Name, c.ReviewGroups) {
+			if c.myGroup(r) {
 				viaGroup = true
 			}
 			continue
@@ -61,7 +62,7 @@ func (c *Client) MyReviewerID(pr PullRequest) (string, bool) {
 	var viaGroup bool
 	for _, r := range pr.Reviewers {
 		if r.IsGroup {
-			if inGroups(r.Name, c.ReviewGroups) {
+			if c.myGroup(r) {
 				viaGroup = true
 			}
 			continue
@@ -80,6 +81,20 @@ func (c *Client) MyReviewerID(pr PullRequest) (string, bool) {
 		return c.MyID, c.MyID != ""
 	}
 	return "", false
+}
+
+// myGroup reports whether a group standing in as a reviewer is one of the
+// signed-in user's.
+//
+// Two sources, checked in that order. Graph resolved the memberships at
+// startup and is the one that cannot go stale, so it is asked first. The
+// configured names are then asked regardless — they are an override, and the
+// only source at all on a tenant whose Graph the token cannot read.
+func (c *Client) myGroup(r Reviewer) bool {
+	if c.groupsLoaded && c.groups.Has(r.ID, r.Name) {
+		return true
+	}
+	return inGroups(r.Name, c.ReviewGroups)
 }
 
 // inGroups reports whether a reviewer group is one of the configured ones.

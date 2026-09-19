@@ -46,11 +46,19 @@ type Client struct {
 	MyID string
 
 	// ReviewGroups are the teams and security groups the signed-in user
-	// belongs to, from the config file. Azure DevOps never says who is in a
-	// group it lists as a reviewer, so membership has to be declared. It
-	// lives next to Me and MyID because it answers the same question — who
-	// this session is — and every caller asking it already holds the client.
+	// declared in the config file. They are an override rather than the only
+	// source now: the Graph API resolves memberships on its own at startup,
+	// and a name written here is honoured on top of whatever that found — so
+	// a tenant whose Graph the token cannot read works exactly as it did.
 	ReviewGroups []string
+
+	// groups is what Graph resolved at startup, and groupsLoaded says
+	// whether it got that far. They are separate because an empty Groups is
+	// ambiguous on its own: a person who genuinely belongs to no group and a
+	// Graph that refused the request look identical, and only one of those
+	// is worth mentioning.
+	groups       Groups
+	groupsLoaded bool
 
 	token string
 	http  *http.Client
@@ -89,7 +97,28 @@ func NewClient(org, project string) (*Client, error) {
 	// an identity to fall back on.
 	_ = c.loadMyID()
 
+	// Nor is this: without it, a group reviewer is only recognised when it
+	// was named in the config, which is where boardwalk was before Graph was
+	// asked at all.
+	//
+	// It runs here, before the program starts, rather than lazily on first
+	// use. NeedsReviewFrom is called from a list filter on the UI goroutine,
+	// and a few requests' worth of latency there would freeze the interface
+	// — a mistake this codebase has already made once, with glamour.
+	c.loadMyGroups()
+
 	return c, nil
+}
+
+// loadMyGroups resolves the signed-in user's group memberships, keeping
+// whatever came back. A failure is recorded as "not loaded" rather than as an
+// empty answer: see the groups field.
+func (c *Client) loadMyGroups() {
+	groups, err := c.MyGroups()
+	if err != nil {
+		return
+	}
+	c.groups, c.groupsLoaded = groups, true
 }
 
 // loadMyID fetches the signed-in user's identity GUID.
