@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -109,10 +110,24 @@ type Builds struct {
 	work   work
 	now    func() time.Time
 
+	// queueDefinition and queueLabel are the pipeline the open branch prompt
+	// will queue, captured when it opened. They cannot be read back off the
+	// list when it closes: a refresh landing in between rebuilds the rows.
+	queueDefinition int
+	queueLabel      string
+
 	// linkBuild is the id of the build a pull request lookup is in flight
 	// for, or 0 when none is. It is how a late answer knows whether it is
 	// still the one asked about — see buildPRMsg.
 	linkBuild int
+
+	// armedBuild is non-nil while a re-run or a cancel is waiting on its
+	// confirming keystroke, and branchPrompt is non-nil while a fresh queue
+	// is asking which branch. They are never both set: each swallows every
+	// key that is not its own, so neither can be reached while the other is
+	// up. Same arrangement as the pull request detail view's three modals.
+	armedBuild   *armedBuild
+	branchPrompt *textinput.Model
 
 	// hidden is true from the moment this view pushes Logs on top of itself
 	// until it is back on top. Root broadcasts buildPRMsg to the whole
@@ -306,11 +321,65 @@ func (m *Builds) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.status, m.failed = msg.Text, msg.Err
 		return m, nil
 
+	case buildQueuedMsg:
+		if msg.Err != nil {
+			m.status, m.failed = msg.Err.Error(), true
+			return m, nil
+		}
+		m.status, m.failed = "queued "+buildLabel(msg.Build), false
+		// The run belongs on the list, and only the server knows the number
+		// it was given. Refetching is the honest way to show it; synthesising
+		// a row from the queue response would put a row on screen that the
+		// next refresh could contradict.
+		return m, m.refresh()
+
+	case buildCancelledMsg:
+		if msg.Err != nil {
+			m.status, m.failed = msg.Err.Error(), true
+			return m, nil
+		}
+		m.status, m.failed = fmt.Sprintf("cancelling build %d", msg.Build), false
+		// Cancelling is a request the agent has to notice, so the row does
+		// not change here — the refresh is what eventually shows it stopped.
+		return m, m.refresh()
+
 	case tea.KeyMsg:
 		// Receiving a key at all proves this view is back on top: Root's
 		// topOnly sends a KeyMsg to the top of the stack alone, never to a
 		// view sitting underneath a pushed Logs.
 		m.hidden = false
+
+		// The branch prompt owns every key while it is open, including the
+		// letters that are otherwise actions — typing "Q" into it must add
+		// the letter, not arm a re-run. Mirrors the branch prompt in
+		// workitems.go.
+		if m.branchPrompt != nil {
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.branchPrompt = nil
+				m.status, m.failed = "", false
+				return m, nil
+			case tea.KeyEnter:
+				branch := strings.TrimSpace(m.branchPrompt.Value())
+				definition, label := m.queueDefinition, m.queueLabel
+				m.branchPrompt = nil
+				if definition == 0 {
+					return m, nil
+				}
+				m.status, m.failed = "queueing "+label+"…", false
+				return m, queueBuildCmd(m.client, definition, branch)
+			}
+			input, cmd := m.branchPrompt.Update(msg)
+			m.branchPrompt = &input
+			return m, cmd
+		}
+
+		// An armed action is the other modal state, and takes every key too,
+		// so a key meant to confirm or cancel it cannot be read as something
+		// else instead.
+		if m.armedBuild != nil {
+			return m, m.handleArmedBuild(msg)
+		}
 
 		if m.browser.Filtering() {
 			break
@@ -347,12 +416,37 @@ func (m *Builds) Update(msg tea.Msg) (View, tea.Cmd) {
 			return m, tea.Batch(m.fetchPullRequestLink(r.Build), m.work.begin(1))
 
 		case "r":
-			m.progress = map[int]azdo.Progress{}
-			m.records = map[int][]azdo.Record{}
-			m.loading = map[int]bool{}
-			m.linkBuild = 0
 			m.status, m.failed = "refreshing…", false
-			return m, m.Init()
+			return m, m.refresh()
+
+		case keyQueue.Help().Key:
+			r, ok := row.(buildRow)
+			if !hasRow || !ok {
+				return m, nil
+			}
+			if r.DefinitionID == 0 {
+				m.status, m.failed = fmt.Sprintf(
+					"%s does not name the pipeline definition it ran, so there is nothing to queue against",
+					buildLabel(r.Build)), true
+				return m, nil
+			}
+			m.queueDefinition, m.queueLabel = r.DefinitionID, buildLabel(r.Build)
+			input := textinput.New()
+			input.Prompt = "branch: "
+			input.SetValue(r.SourceBranch)
+			input.CursorEnd()
+			input.Focus()
+			m.branchPrompt = &input
+			return m, textinput.Blink
+		}
+
+		if action, ok := matchBuildAction(msg); ok {
+			r, isBuild := row.(buildRow)
+			if !hasRow || !isBuild {
+				return m, nil
+			}
+			m.armBuild(action, r.Build)
+			return m, nil
 		}
 	}
 
@@ -418,6 +512,60 @@ func (m *Builds) Body(width, height int) string {
 	return m.browser.View()
 }
 
+// refresh re-reads the list from scratch, dropping every timeline with it so
+// the rows rebuild against what the server says now. It is its own method
+// because three things ask for it — the refresh key and the two actions that
+// change what the list should show — and a queued run that did not appear
+// would read as a queue that silently failed.
+func (m *Builds) refresh() tea.Cmd {
+	m.progress = map[int]azdo.Progress{}
+	m.records = map[int][]azdo.Record{}
+	m.loading = map[int]bool{}
+	m.linkBuild = 0
+	return m.Init()
+}
+
+// armBuild arms an action, or reports why it does not apply.
+func (m *Builds) armBuild(a buildAction, b azdo.Build) {
+	armed, status := armBuildAction(a, b)
+	m.armedBuild = armed
+	// A refusal is reported as one: an ordinary-looking status line reads as
+	// though the key had done something.
+	m.status, m.failed = status, armed == nil
+}
+
+// handleArmedBuild resolves a keypress while an action is armed. esc cancels,
+// the same action's key confirms and fires it, and the other action's key
+// re-arms to that instead of forcing an esc round trip. Anything else is
+// swallowed — the arm is modal, the same way the vote is in the pull request
+// detail view.
+func (m *Builds) handleArmedBuild(msg tea.KeyMsg) tea.Cmd {
+	if key.Matches(msg, keyBack) {
+		m.armedBuild = nil
+		m.status, m.failed = "", false
+		return nil
+	}
+
+	action, ok := matchBuildAction(msg)
+	if !ok {
+		return nil
+	}
+	if action != m.armedBuild.action {
+		row, hasRow := m.browser.Selected()
+		r, isBuild := row.(buildRow)
+		if !hasRow || !isBuild {
+			return nil
+		}
+		m.armBuild(action, r.Build)
+		return nil
+	}
+
+	armed := m.armedBuild
+	m.armedBuild = nil
+	m.status, m.failed = armed.doing(), false
+	return armed.fire(m.client)
+}
+
 // Title reports the run count and the project the builds belong to.
 func (m *Builds) Title() string {
 	return fmt.Sprintf("builds (%d) · %s/%s", m.browser.Len(), m.client.Org, m.client.Project)
@@ -425,13 +573,21 @@ func (m *Builds) Title() string {
 
 // Hints is the key line at the bottom.
 func (m *Builds) Keys() help.KeyMap {
-	own := []key.Binding{keyLogs, keyLinkedPR}
-	return listKeys(own, own...)
+	// The footer carries the two keys that only read; the three that change
+	// something are behind "?". A footer naming five actions would push esc
+	// and ? off the end of it at ordinary widths, which is the defect
+	// TestEveryViewsShortHelpSurvivesOrdinaryWidths exists to catch.
+	short := []key.Binding{keyLogs, keyLinkedPR}
+	full := []key.Binding{keyLogs, keyLinkedPR, keyRerun, keyQueue, keyCancelBuild}
+	return listKeys(short, full...)
 }
 
 // Status is the transient status line, or the fuzzy filter prompt while one is
 // open.
 func (m *Builds) Status() (string, bool) {
+	if m.branchPrompt != nil {
+		return m.branchPrompt.View(), false
+	}
 	if m.browser.Filtering() {
 		return m.browser.FilterView(), false
 	}
@@ -440,4 +596,6 @@ func (m *Builds) Status() (string, bool) {
 
 // Prompting reports whether a text prompt is open, so Root leaves esc and q to
 // the prompt rather than treating them as navigation.
-func (m *Builds) Prompting() bool { return m.browser.Filtering() }
+func (m *Builds) Prompting() bool {
+	return m.branchPrompt != nil || m.armedBuild != nil || m.browser.Filtering()
+}

@@ -75,8 +75,14 @@ func classify(status, result string) BuildStatus {
 
 // Build is one pipeline run.
 type Build struct {
-	ID           int
-	Number       string
+	ID     int
+	Number string
+	// Pipeline is the definition's display name, and DefinitionID is the
+	// definition itself. Both are kept because they answer different
+	// questions: the name is what a row shows, and the id is the only thing
+	// the queue endpoint will accept — queueing a run by pipeline name is
+	// not something the API offers.
+	DefinitionID int
 	Pipeline     string
 	RequestedFor string
 	SourceBranch string
@@ -195,6 +201,7 @@ type buildJSON struct {
 	Queued       time.Time `json:"queueTime"`
 	SourceBranch string    `json:"sourceBranch"`
 	Definition   struct {
+		ID   int    `json:"id"`
 		Name string `json:"name"`
 	} `json:"definition"`
 	RequestedFor struct {
@@ -206,6 +213,7 @@ func (v buildJSON) build() Build {
 	return Build{
 		ID:           v.ID,
 		Number:       v.Number,
+		DefinitionID: v.Definition.ID,
 		Pipeline:     v.Definition.Name,
 		RequestedFor: v.RequestedFor.DisplayName,
 		SourceBranch: v.SourceBranch,
@@ -331,4 +339,42 @@ func (c *Client) NewLogChunks(buildID int, records []Record, cursor LogCursor) (
 		chunks = append(chunks, LogChunk{Task: r.Name, LogID: r.LogID, Lines: lines})
 	}
 	return chunks, nil
+}
+
+// QueueBuild starts a new run of a definition, optionally against a branch.
+// The queued run comes back, so a caller can name it rather than only report
+// that something was queued.
+//
+// branch is the full ref, refs/heads/main. An empty one is left out of the
+// body altogether rather than sent as "": the pipeline's own default branch
+// is what "no branch given" means, and an empty string would be read as a ref
+// by that name.
+func (c *Client) QueueBuild(definitionID int, branch string) (Build, error) {
+	body := map[string]any{
+		"definition": map[string]int{"id": definitionID},
+	}
+	if branch != "" {
+		body["sourceBranch"] = branch
+	}
+
+	var v buildJSON
+	endpoint := fmt.Sprintf("%s/%s/%s/_apis/build/builds?api-version=%s",
+		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project), APIVersion)
+	if err := c.post(endpoint, body, &v); err != nil {
+		return Build{}, err
+	}
+	return v.build(), nil
+}
+
+// CancelBuild asks Azure DevOps to stop a run.
+//
+// "cancelling" rather than "cancelled" is deliberate and is what the API
+// wants: cancelling is a request the agent has to notice and act on, not a
+// state the caller can simply assert. The run stays in that state — which
+// classify folds into StatusRunning — until the agent stops, which is why the
+// log pane keeps tailing a cancelled build rather than treating it as done.
+func (c *Client) CancelBuild(id int) error {
+	endpoint := fmt.Sprintf("%s/%s/%s/_apis/build/builds/%d?api-version=%s",
+		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project), id, APIVersion)
+	return c.patch(endpoint, "application/json", map[string]string{"status": "cancelling"}, nil)
 }

@@ -237,6 +237,21 @@ says who is in that group, so boardwalk has to be told. See Setup.
 | key | |
 |---|---|
 | `enter` | open the logs |
+| `p` | the pull request this run built |
+| `Q` | re-run — this pipeline, this branch |
+| `N` | new run — asks which branch |
+| `C` | cancel a run that has not finished |
+
+`Q` and `C` arm on the first press and fire on the second, the way the draft
+toggle does: they start and stop work on a shared build pool, and a stray
+keystroke cannot be taken back by pressing the key again. `esc` disarms, and
+pressing the other one re-arms to that instead. `N` asks for a branch first,
+prefilled with the selected run's, and that prompt is the deliberate act the
+arm would otherwise be.
+
+Capitals because the lower-case letters are taken in views reachable from
+here: `r` refreshes everywhere, `c` replies on a pull request the build list
+links to.
 
 ### Logs
 
@@ -309,7 +324,6 @@ Features:
 - Search inside the log pane
 - Pull request creation from a work item's branch
 - Caching views in the menu, so re-entering one does not refetch the project
-- Queue, re-run and cancel a build from the builds view
 - `--json` output, so a dump can be piped into something else
 - A watch mode that polls for pull requests newly waiting on you
 - Resolving review groups through the Graph API instead of naming them in the config

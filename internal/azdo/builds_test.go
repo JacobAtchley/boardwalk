@@ -1,6 +1,7 @@
 package azdo
 
 import (
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -325,5 +326,108 @@ func TestNewLogChunksReturnsWhatItGatheredBeforeAnError(t *testing.T) {
 	}
 	if cursor[7] != 0 {
 		t.Errorf("cursor[7] = %d, want it unadvanced for the log that failed", cursor[7])
+	}
+}
+
+func TestBuildCarriesItsDefinitionID(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":9001,"buildNumber":"20260918.1","status":"completed","result":"succeeded",
+			"sourceBranch":"refs/heads/main","definition":{"id":42,"name":"platform-ci"}}`))
+	})
+
+	b, err := c.BuildByID(9001)
+	if err != nil {
+		t.Fatalf("BuildByID returned %v", err)
+	}
+	// Without it there is nothing to queue a re-run against: the definition's
+	// name does not address it.
+	if b.DefinitionID != 42 {
+		t.Errorf("DefinitionID = %d, want 42", b.DefinitionID)
+	}
+}
+
+func TestQueueBuildPostsTheDefinitionAndBranch(t *testing.T) {
+	var gotMethod, gotPath, gotBody string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotMethod, gotPath, gotBody = r.Method, r.URL.Path, string(body)
+		w.Write([]byte(`{"id":9100,"buildNumber":"20260918.2","status":"notStarted",
+			"definition":{"id":42,"name":"platform-ci"}}`))
+	})
+
+	b, err := c.QueueBuild(42, "refs/heads/feature/x")
+	if err != nil {
+		t.Fatalf("QueueBuild returned %v", err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %s, want POST", gotMethod)
+	}
+	if want := "/acme/Platform/_apis/build/builds"; gotPath != want {
+		t.Errorf("path = %s, want %s", gotPath, want)
+	}
+	for _, want := range []string{`"id":42`, `"refs/heads/feature/x"`} {
+		if !strings.Contains(gotBody, want) {
+			t.Errorf("body = %s, want it carrying %s", gotBody, want)
+		}
+	}
+	// The queued run comes back, which is what lets the view name it rather
+	// than saying only that something was queued.
+	if b.ID != 9100 {
+		t.Errorf("queued build id = %d, want the one the server answered with", b.ID)
+	}
+}
+
+// TestQueueBuildOmitsAnEmptyBranch — queueing with no branch is the pipeline's
+// own default, and sending "" would ask for a ref of that name.
+func TestQueueBuildOmitsAnEmptyBranch(t *testing.T) {
+	var gotBody string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Write([]byte(`{"id":9100}`))
+	})
+
+	if _, err := c.QueueBuild(42, ""); err != nil {
+		t.Fatalf("QueueBuild returned %v", err)
+	}
+	if strings.Contains(gotBody, "sourceBranch") {
+		t.Errorf("body = %s, want no sourceBranch at all", gotBody)
+	}
+}
+
+func TestCancelBuildPatchesItToCancelling(t *testing.T) {
+	var gotMethod, gotPath, gotBody string
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotMethod, gotPath, gotBody = r.Method, r.URL.Path, string(body)
+		w.Write([]byte(`{"id":9001,"status":"cancelling"}`))
+	})
+
+	if err := c.CancelBuild(9001); err != nil {
+		t.Fatalf("CancelBuild returned %v", err)
+	}
+	if gotMethod != http.MethodPatch {
+		t.Errorf("method = %s, want PATCH", gotMethod)
+	}
+	if want := "/acme/Platform/_apis/build/builds/9001"; gotPath != want {
+		t.Errorf("path = %s, want %s", gotPath, want)
+	}
+	if !strings.Contains(gotBody, `"cancelling"`) {
+		t.Errorf("body = %s, want it setting the status to cancelling", gotBody)
+	}
+}
+
+func TestQueueBuildReportsTheServersRefusal(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"message":"you do not have queue build permission"}`))
+	})
+
+	_, err := c.QueueBuild(42, "refs/heads/main")
+	if err == nil {
+		t.Fatal("QueueBuild reported success on a 403")
+	}
+	if !strings.Contains(err.Error(), "queue build permission") {
+		t.Errorf("error = %v, want the server's own message in it", err)
 	}
 }
