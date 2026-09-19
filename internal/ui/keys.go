@@ -69,6 +69,16 @@ var (
 	// claim on the letter and it belongs to a view this one cannot reach.
 	keyStamps = key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "timestamps"))
 
+	// The three build actions are capitals because their lower-case letters
+	// are all spoken for in views reachable from the build list: r refreshes
+	// everywhere, c replies on a pull request the builds view links to, and n
+	// is free today but sits one letter from them. A capital also suits what
+	// they do — starting and stopping CI is not the same weight of act as
+	// moving a cursor.
+	keyRerun       = key.NewBinding(key.WithKeys("Q"), key.WithHelp("Q", "re-run"))
+	keyQueue       = key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "new run"))
+	keyCancelBuild = key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "cancel run"))
+
 	keyApprove = key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "approve"))
 	keyWait    = key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "wait for author"))
 	keyReject  = key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "reject"))
