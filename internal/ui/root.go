@@ -27,6 +27,7 @@ var menuEntries = []menuEntry{
 	{"items", "work items", "browse, branch and set state"},
 	{"prs", "pull requests", "drafts, branches, comments and age"},
 	{"builds", "builds", "pipeline runs, current step and logs"},
+	{"status", "session", "who boardwalk thinks you are, and what it resolved"},
 }
 
 // Root owns the menu, the view stack, and every piece of chrome. Views render
@@ -83,6 +84,8 @@ func (r *Root) build(name string) View {
 		return NewPullRequests(r.client)
 	case "builds":
 		return NewBuilds(r.client)
+	case "status":
+		return NewStatus(r.client, r.client.Session())
 	default:
 		return nil
 	}

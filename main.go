@@ -4,6 +4,7 @@
 //	boardwalk items      # straight to work items
 //	boardwalk prs        # straight to pull requests
 //	boardwalk builds     # straight to pipeline builds
+//	boardwalk status     # what boardwalk resolved about this session
 //	boardwalk -mine      # work items assigned to you
 //	boardwalk -all       # include closed/done/resolved/removed
 //	boardwalk -dump      # print work item rows and exit, no TUI
@@ -32,7 +33,7 @@ import (
 var version = "dev"
 
 // subcommands are the views boardwalk can open directly, skipping the menu.
-var subcommands = map[string]bool{"items": true, "prs": true, "builds": true}
+var subcommands = map[string]bool{"items": true, "prs": true, "builds": true, "status": true}
 
 // flags is every command-line option boardwalk understands, plus the
 // starting view once -mine/-all have been folded in by startFor.
@@ -108,7 +109,7 @@ func parseCommandLine(args []string) (flags, error) {
 
 	if leftover := fs.Args(); len(leftover) > 0 {
 		return flags{}, fmt.Errorf(
-			"unexpected argument %q — subcommands come first, e.g. boardwalk %s\n  valid subcommands: items, prs, builds",
+			"unexpected argument %q — subcommands come first, e.g. boardwalk %s\n  valid subcommands: items, prs, builds, status",
 			leftover[0], leftover[0])
 	}
 
