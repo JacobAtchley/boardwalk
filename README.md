@@ -82,12 +82,12 @@ show you the shape, if either is absent.
 `reviewGroups` is optional. What it affects is `v` in the pull request view
 finding work assigned to a group rather than to you, and your being able to
 vote on a pull request only a group of yours is reviewing — and boardwalk
-works that out for itself at startup, through the Graph API, walking up from
+works that out for itself at startup, through the Identities API, expanding
 your identity through however many levels of nested group it takes.
 
 Name a group here and it is honoured on top of whatever that found. That is
-worth doing in two cases: your token cannot read your organisation's Graph, so
-nothing was resolved at all; or you want a group you are not formally a member
+worth doing in two cases: your token cannot read your organisation's
+identities, so nothing was resolved at all; or you want a group you are not formally a member
 of to count as yours anyway. It costs no requests and works offline, at the
 price of going stale when your memberships change.
 
@@ -207,8 +207,8 @@ the diff.
 
 `A` approves, `W` waits for the author and `X` rejects, each on a second press
 of the same key. They show when the pull request is yours to vote on — named
-directly, or through a group of yours, whether Graph resolved that group or
-`reviewGroups` named it. Voting on a group's
+directly, or through a group of yours, whether it was resolved at startup or
+named in `reviewGroups`. Voting on a group's
 behalf casts the vote under your own identity, which boardwalk reads once at
 startup from `connectionData`; Azure DevOps then adds you as a reviewer in your
 own right and leaves the group entry alone, exactly as the web UI does.
@@ -244,14 +244,14 @@ request knows which work item it belongs to.
 excludes your own. A pull request can name a group as its reviewer rather than
 a person — `platform-devs` rather than you — and nothing in the pull request
 says who is in that group. boardwalk works that out at startup through the
-Graph API, walking up from your identity through however many levels of nested
-group it takes, so a team you were added to this morning counts this morning.
+Identities API, expanding your identity to every group it transitively
+belongs to, so a team you were added to this morning counts this morning.
 
 `reviewGroups` in the config is still read, as an override on top of that: a
-name written there is honoured whatever Graph did or did not find, and is the
-only source at all if your token cannot read your organisation's Graph. A
-tenant where it is locked down behaves exactly as boardwalk did before. See
-Setup.
+name written there is honoured whatever was or was not resolved, and is the
+only source at all if your token cannot read your organisation's identities.
+A tenant where that is locked down behaves exactly as boardwalk did before
+any of this. See Setup.
 
 ### Session
 
@@ -261,11 +261,12 @@ Setup.
 
 `session` on the menu — or `boardwalk status` — shows what boardwalk worked
 out at startup: the organisation and project, which config file it read, who
-`az` says you are, the identity GUID it votes with, and every review group the
-Graph API resolved you into, alongside whatever `reviewGroups` adds.
+`az` says you are, the identity GUID it votes with, and every review group it
+resolved you into, alongside whatever `reviewGroups` adds.
 
 It is there because all of that used to be invisible and several parts of it
-fail quietly. A token that cannot read the Graph API, an `az account show`
+fail quietly. A token that cannot read your organisation's identities, an
+`az account show`
 that named no user, a working directory that is not one of the project's
 repositories — each leaves boardwalk running and apparently fine, and each
 turns up somewhere else as a list with nothing in it.
@@ -362,6 +363,20 @@ az CLI's truncated 1000.
 **`workitemsbatch` ignores the order ids are sent in** and answers ascending,
 so the query's `ORDER BY [System.Id] DESC` has to be reapplied client-side.
 
+**Graph's `memberships?direction=up` omits Azure AD groups.** Asking Graph
+which groups a user belongs to returns only `vssgp.` containers — Azure
+DevOps's own groups — and silently leaves out the `aadgp.` ones an
+organisation federates in from Entra. The membership is genuinely there:
+asking for the edge directly answers 200, and asking the group who it
+contains lists the user. Only the upward listing drops it, and it reports
+success while doing so.
+
+That is why review groups are resolved through the Identities API
+(`identities?queryMembership=Expanded`) instead. On the tenant this was found
+against, the Graph walk resolved 35 groups and not one of the ones actually
+used as pull request reviewers; the identity expansion returns all 74. It is
+also five requests at startup rather than about seventy.
+
 **The build log's `startLine` parameter is undocumented as 0- or 1-based.**
 Azure DevOps's reference calls it only "the start line." boardwalk treats it
 as a 0-based offset equal to the number of lines already consumed on each
@@ -448,13 +463,11 @@ what Azure DevOps does with it:
   reason the check exists still holds.
 - Whether an empty `System.AssignedTo` unassigns rather than failing validation.
   Unreachable in normal use: both call sites refuse to send an empty assignee.
-- Which field of a Graph group matches the `id` a pull request puts on a group
-  reviewer. For an Azure DevOps group the group's `originId` should be it; for
-  an Azure AD group the `originId` is the AAD object id, which is a different
-  GUID from the identity Azure DevOps mints for it. `Groups.Has` therefore
-  matches on the id **or** the display name, so a tenant using AAD groups
-  resolves through the name rather than silently resolving nothing — but
-  which of the two actually fires has not been seen against a live tenant.
+- Whether every identity provider puts the same GUID on a reviewer entry as
+  the Identities API reports for the group. Against the one live tenant this
+  has been run on they match exactly, for both an Azure DevOps group and an
+  Azure AD one, so the id is what fires; `Groups.Has` also accepts the display
+  name, which has not been needed there.
 
 ## License
 
