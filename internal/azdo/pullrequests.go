@@ -251,25 +251,7 @@ type threadPosition struct {
 // Threads summarises one pull request's comment threads.
 func (c *Client) Threads(repoID string, prID int) ([]Thread, error) {
 	var resp struct {
-		Value []struct {
-			ID        int    `json:"id"`
-			Status    string `json:"status"`
-			IsDeleted bool   `json:"isDeleted"`
-			Context   *struct {
-				FilePath   string          `json:"filePath"`
-				LeftStart  *threadPosition `json:"leftFileStart"`
-				RightStart *threadPosition `json:"rightFileStart"`
-			} `json:"threadContext"`
-			Comments []struct {
-				ID          int       `json:"id"`
-				Content     string    `json:"content"`
-				CommentType string    `json:"commentType"`
-				Published   time.Time `json:"publishedDate"`
-				Author      struct {
-					DisplayName string `json:"displayName"`
-				} `json:"author"`
-			} `json:"comments"`
-		} `json:"value"`
+		Value []threadJSON `json:"value"`
 	}
 
 	endpoint := fmt.Sprintf(
@@ -285,40 +267,71 @@ func (c *Client) Threads(repoID string, prID int) ([]Thread, error) {
 		if t.IsDeleted {
 			continue
 		}
-
+		thread := t.thread()
 		// Azure DevOps files its own activity — reviewers added, the source
-		// branch updated — as threads. They carry only system comments, and
-		// keeping them would make every pull request look busy with discussion
-		// nobody wrote.
-		thread := Thread{ID: t.ID, Status: t.Status, Resolved: resolvedStatus(t.Status)}
-		if t.Context != nil {
-			thread.File = t.Context.FilePath
-			switch {
-			case t.Context.RightStart != nil:
-				thread.Line, thread.RightSide = t.Context.RightStart.Line, true
-			case t.Context.LeftStart != nil:
-				thread.Line = t.Context.LeftStart.Line
-			}
-		}
-		for _, cm := range t.Comments {
-			if cm.CommentType == "system" {
-				continue
-			}
-			thread.Comments = append(thread.Comments, ThreadComment{
-				ID:      cm.ID,
-				Author:  cm.Author.DisplayName,
-				Created: cm.Published,
-				// Pull request comments are written in markdown, so this is a
-				// pass-through unless someone pasted HTML in.
-				Text: Markdown(cm.Content),
-			})
-		}
+		// branch updated — as threads. They carry only system comments, so
+		// once those are dropped there is nothing left, and keeping them
+		// would make every pull request look busy with discussion nobody
+		// wrote.
 		if len(thread.Comments) == 0 {
 			continue
 		}
 		threads = append(threads, thread)
 	}
 	return threads, nil
+}
+
+// threadJSON is a thread as the API sends it. It is a named type rather than
+// an anonymous one because two endpoints answer with it — listing a pull
+// request's discussion, and creating one thread — and a second copy of this
+// shape is a second place for the parsing to drift.
+type threadJSON struct {
+	ID        int    `json:"id"`
+	Status    string `json:"status"`
+	IsDeleted bool   `json:"isDeleted"`
+	Context   *struct {
+		FilePath   string          `json:"filePath"`
+		LeftStart  *threadPosition `json:"leftFileStart"`
+		RightStart *threadPosition `json:"rightFileStart"`
+	} `json:"threadContext"`
+	Comments []struct {
+		ID          int       `json:"id"`
+		Content     string    `json:"content"`
+		CommentType string    `json:"commentType"`
+		Published   time.Time `json:"publishedDate"`
+		Author      struct {
+			DisplayName string `json:"displayName"`
+		} `json:"author"`
+	} `json:"comments"`
+}
+
+// thread converts the payload, dropping the system comments Azure DevOps
+// files its own activity as.
+func (t threadJSON) thread() Thread {
+	thread := Thread{ID: t.ID, Status: t.Status, Resolved: resolvedStatus(t.Status)}
+	if t.Context != nil {
+		thread.File = t.Context.FilePath
+		switch {
+		case t.Context.RightStart != nil:
+			thread.Line, thread.RightSide = t.Context.RightStart.Line, true
+		case t.Context.LeftStart != nil:
+			thread.Line = t.Context.LeftStart.Line
+		}
+	}
+	for _, cm := range t.Comments {
+		if cm.CommentType == "system" {
+			continue
+		}
+		thread.Comments = append(thread.Comments, ThreadComment{
+			ID:      cm.ID,
+			Author:  cm.Author.DisplayName,
+			Created: cm.Published,
+			// Pull request comments are written in markdown, so this is a
+			// pass-through unless someone pasted HTML in.
+			Text: Markdown(cm.Content),
+		})
+	}
+	return thread
 }
 
 // Summarize counts a pull request's threads for the list's column, and keeps
@@ -353,6 +366,61 @@ func unresolvedStatus(s string) bool { return s == "active" || s == "pending" }
 
 // ReplyToThread posts a comment onto an existing thread, addressed to
 // parentCommentID — the API answers a specific comment rather than the thread
+// CreateThread starts a review thread against one line of one file.
+//
+// The line is the new side's — the file as the pull request leaves it — which
+// is what the file view's cursor reports and the only side a comment can be
+// anchored to from there. A line the pull request removed is not in the new
+// file and has nothing to hang a comment on; the caller refuses that before
+// reaching here.
+//
+// Azure DevOps positions a comment by a start and an end, each a line and a
+// column, so a whole-line comment is sent as the full line: column one to
+// column one of the same line. Sending a context without offsets is rejected
+// as incomplete rather than defaulted.
+//
+// The thread comes back so the view can show it straight away rather than
+// refetching the whole discussion for the one comment it already knows about
+// — the same reasoning updateThread uses for a reply.
+func (c *Client) CreateThread(repoID string, prID int, path string, line int, text string) (Thread, error) {
+	type position struct {
+		Line   int `json:"line"`
+		Offset int `json:"offset"`
+	}
+	body := struct {
+		Comments []map[string]any `json:"comments"`
+		Status   string           `json:"status"`
+		Context  struct {
+			FilePath   string   `json:"filePath"`
+			RightStart position `json:"rightFileStart"`
+			RightEnd   position `json:"rightFileEnd"`
+		} `json:"threadContext"`
+	}{
+		Comments: []map[string]any{{
+			"parentCommentId": 0,
+			"content":         text,
+			"commentType":     "text",
+		}},
+		// A new review comment is something for somebody to answer, which is
+		// what active means. The alternative is posting it already closed,
+		// which is a note to nobody.
+		Status: "active",
+	}
+	body.Context.FilePath = path
+	body.Context.RightStart = position{Line: line, Offset: 1}
+	body.Context.RightEnd = position{Line: line, Offset: 1}
+
+	var resp threadJSON
+	endpoint := fmt.Sprintf(
+		"%s/%s/%s/_apis/git/repositories/%s/pullRequests/%d/threads?api-version=%s",
+		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project),
+		url.PathEscape(repoID), prID, APIVersion)
+	if err := c.post(endpoint, body, &resp); err != nil {
+		return Thread{}, err
+	}
+	return resp.thread(), nil
+}
+
 // as a whole, and the detail view only ever offers to answer the opener.
 func (c *Client) ReplyToThread(repoID string, prID, threadID, parentCommentID int, text string) (ThreadComment, error) {
 	body := struct {

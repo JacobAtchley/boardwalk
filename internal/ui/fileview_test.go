@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -251,5 +252,188 @@ func TestFileViewIsNotOpenedBeforeItsContentArrives(t *testing.T) {
 	}
 	if _, ok := cmd().(PushMsg); ok {
 		t.Error("enter opened a file whose content had not arrived")
+	}
+}
+
+// commentOn walks the cursor to the file's first added line, which is the
+// one a review comment in these tests is written against.
+func commentOn(t *testing.T, m *FileView) *FileView {
+	t.Helper()
+	for range len(m.lines) {
+		if n, ok := m.anchorLine(); ok && m.lines[m.cursor].Kind == udiff.Insert {
+			_ = n
+			return m
+		}
+		m, _ = pressFile(t, m, runes("j"))
+	}
+	t.Fatal("no added line to comment on")
+	return nil
+}
+
+func TestFileCommentPromptOpensOnTheCursorLine(t *testing.T) {
+	m := commentOn(t, newFileView(t, nil))
+	line, _ := m.anchorLine()
+
+	m, cmd := pressFile(t, m, runes("c"))
+	if cmd == nil {
+		t.Error("opening the prompt should start the cursor blinking")
+	}
+	if m.commentPrompt == nil {
+		t.Fatal("c did not open the comment prompt")
+	}
+	if !m.Prompting() {
+		t.Error("Prompting() is false with the prompt open, so Root would take esc for navigation")
+	}
+	if status, _ := m.Status(); !strings.Contains(status, fmt.Sprint(line)) {
+		t.Errorf("status = %q, want the prompt naming line %d", status, line)
+	}
+}
+
+func TestFileCommentPromptEnterPosts(t *testing.T) {
+	m := commentOn(t, newFileView(t, nil))
+
+	m, _ = pressFile(t, m, runes("c"))
+	for _, r := range "this still races" {
+		m, _ = pressFile(t, m, runes(string(r)))
+	}
+	m, cmd := pressFile(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if cmd == nil {
+		t.Fatal("enter did not post the comment")
+	}
+	if m.commentPrompt != nil {
+		t.Error("enter left the prompt open")
+	}
+	if status, _ := m.Status(); !strings.Contains(status, "posting") {
+		t.Errorf("status = %q, want it saying the comment is on its way", status)
+	}
+}
+
+// TestCommentPromptRefusesAnEmptyComment — enter on an empty prompt is a
+// mistake, not a request to post nothing.
+func TestFileCommentPromptRefusesAnEmptyComment(t *testing.T) {
+	m := commentOn(t, newFileView(t, nil))
+
+	m, _ = pressFile(t, m, runes("c"))
+	m, cmd := pressFile(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if cmd != nil {
+		t.Error("an empty comment was sent")
+	}
+	if m.commentPrompt != nil {
+		t.Error("the prompt stayed open")
+	}
+}
+
+func TestFileCommentPromptEscapeCancels(t *testing.T) {
+	m := commentOn(t, newFileView(t, nil))
+
+	m, _ = pressFile(t, m, runes("c"))
+	m, cmd := pressFile(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+
+	if cmd != nil {
+		t.Error("cancelling the prompt posted anyway")
+	}
+	if m.commentPrompt != nil {
+		t.Error("escape did not close the prompt")
+	}
+}
+
+// TestCommentPromptSwallowsActionKeys — with the prompt open "d" is a letter,
+// not the diff toggle.
+func TestFileCommentPromptSwallowsActionKeys(t *testing.T) {
+	m := commentOn(t, newFileView(t, nil))
+	before := m.showDiff
+
+	m, _ = pressFile(t, m, runes("c"))
+	m, _ = pressFile(t, m, runes("d"))
+
+	if m.showDiff != before {
+		t.Error("a keystroke meant for the prompt toggled the diff")
+	}
+	if !strings.HasSuffix(m.commentPrompt.Value(), "d") {
+		t.Errorf("prompt = %q, want the keystroke in it", m.commentPrompt.Value())
+	}
+}
+
+// TestCommentRefusedOnARemovedLine — a line the pull request deleted is not
+// in the new file, so the server has nothing to anchor a comment to. Refused
+// before the request, the way armDraft refuses a merged pull request.
+func TestFileCommentRefusedOnARemovedLine(t *testing.T) {
+	m := newFileView(t, nil)
+	for range len(m.lines) {
+		if m.lines[m.cursor].Kind == udiff.Delete {
+			break
+		}
+		m, _ = pressFile(t, m, runes("j"))
+	}
+	if m.lines[m.cursor].Kind != udiff.Delete {
+		t.Fatal("no removed line in the fixture")
+	}
+
+	m, cmd := pressFile(t, m, runes("c"))
+	if cmd != nil || m.commentPrompt != nil {
+		t.Fatal("the prompt opened on a line that cannot carry a comment")
+	}
+	status, failed := m.Status()
+	if !failed {
+		t.Error("the refusal was not reported as one")
+	}
+	if !strings.Contains(status, "removed") {
+		t.Errorf("status = %q, want it saying why the line cannot take a comment", status)
+	}
+}
+
+// TestPostedCommentAppearsWithoutARefetch — the thread the server just made
+// is already known, and waiting for a refetch to see your own comment reads
+// as the comment having failed.
+func TestPostedCommentAppearsWithoutARefetch(t *testing.T) {
+	m := commentOn(t, newFileView(t, nil))
+	line, _ := m.anchorLine()
+
+	updated, _ := m.Update(threadCreatedMsg{
+		PR:   512,
+		Path: "/internal/ui/tail.go",
+		Thread: azdo.Thread{ID: 91, Status: "active", File: "/internal/ui/tail.go",
+			Line: line, RightSide: true,
+			Comments: []azdo.ThreadComment{{ID: 1, Author: "Dev Example", Text: "freshly written"}}},
+	})
+	m = updated.(*FileView)
+
+	if view := m.Body(100, 30); !strings.Contains(view, "freshly written") {
+		t.Errorf("the comment just posted is not on screen:\n%s", view)
+	}
+	if status, failed := m.Status(); failed {
+		t.Errorf("status = %q reported as a failure after a successful post", status)
+	}
+}
+
+func TestPostFailureGoesToTheStatusLine(t *testing.T) {
+	m := commentOn(t, newFileView(t, nil))
+
+	updated, _ := m.Update(threadCreatedMsg{PR: 512, Path: "/internal/ui/tail.go", Err: errTest})
+	m = updated.(*FileView)
+
+	if status, failed := m.Status(); !failed || !strings.Contains(status, errTest.Error()) {
+		t.Errorf("status = %q (failed=%v), want the failure reported", status, failed)
+	}
+}
+
+// TestThreadForAnotherFileIsIgnored — Root broadcasts to every view in the
+// stack, and two file views can be open at once by way of a linked pull
+// request.
+func TestThreadForAnotherFileIsIgnored(t *testing.T) {
+	m := commentOn(t, newFileView(t, nil))
+
+	updated, _ := m.Update(threadCreatedMsg{
+		PR:   512,
+		Path: "/somewhere/else.go",
+		Thread: azdo.Thread{ID: 92, File: "/somewhere/else.go", Line: 1, RightSide: true,
+			Comments: []azdo.ThreadComment{{ID: 1, Text: "not this file"}}},
+	})
+	m = updated.(*FileView)
+
+	if view := m.Body(100, 30); strings.Contains(view, "not this file") {
+		t.Errorf("another file's new thread landed in this view:\n%s", view)
 	}
 }

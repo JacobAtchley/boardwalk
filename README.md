@@ -237,6 +237,12 @@ a language boardwalk has no lexer for is shown plainly rather than guessed
 at. Lines the pull request removed sit where they were, dimmed, and go away
 with `d`.
 
+`c` writes a review comment against the line the cursor is on, and it appears
+under that line as soon as the server takes it. A line the pull request
+removed is not in the file any more, so there is nothing to attach a comment
+to and `c` says so rather than failing at the request. Replying to an
+existing thread and resolving one stay on the pull request pane behind `esc`.
+
 Review comments sit under the line they were written against, marked resolved
 or unresolved, and a file with discussion on it carries the count in the list
 beside its name. A comment whose line the diff's three lines of context never
@@ -266,6 +272,7 @@ any of this. See Setup.
 | key | |
 |---|---|
 | `j` / `k` | move the line cursor |
+| `c` | comment on the line under the cursor |
 | `g` / `G` | top / bottom |
 | `d` | show / hide the change marks |
 
@@ -479,6 +486,12 @@ what Azure DevOps does with it:
   reason the check exists still holds.
 - Whether an empty `System.AssignedTo` unassigns rather than failing validation.
   Unreachable in normal use: both call sites refuse to send an empty assignee.
+- Whether `POST .../threads` accepts the `threadContext` boardwalk sends for a
+  review comment — a `filePath` with `rightFileStart` and `rightFileEnd` both
+  at column one of the commented line. **Worth writing one comment on a
+  throwaway pull request before relying on `c`**: the shape is from the
+  reference rather than from a live tenant, and a rejection here is the one
+  that loses something you typed.
 - Whether every identity provider puts the same GUID on a reviewer entry as
   the Identities API reports for the group. Against the one live tenant this
   has been run on they match exactly, for both an Azure DevOps group and an
