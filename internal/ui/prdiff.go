@@ -57,6 +57,11 @@ type changeRow struct {
 	// bubbletea runs Update and View on one goroutine — the map is written in
 	// Update and read here, never from a command.
 	read map[string]fileDiff
+
+	// threads is how many review threads were written against this file. The
+	// count rather than the threads themselves: the row shows a number, and
+	// the pane beside it fetches the threads from the view.
+	threads int
 }
 
 func (r changeRow) FilterValue() string { return r.Path }
@@ -66,10 +71,19 @@ func (r changeRow) Render(width int) string {
 	if _, done := r.read[r.Path]; !done {
 		pending = chromeStyle.Render("·")
 	}
+
+	// A file nobody commented on carries no marker at all. Most files in most
+	// pull requests are that file, and a column of "0" would be noise on
+	// every one of them.
+	discussion := ""
+	if r.threads > 0 {
+		discussion = " " + labelStyle.Render(fmt.Sprintf("💬%d", r.threads))
+	}
+
 	// The glyph and the pending marker are one display column each, styled or
 	// not, so the path can be cut against the width they leave.
-	return fmt.Sprintf("%s %s %s", changeGlyph(r.ChangeType), pending,
-		shortPath(r.Path, max(4, width-4)))
+	return fmt.Sprintf("%s %s %s%s", changeGlyph(r.ChangeType), pending,
+		shortPath(r.Path, max(4, width-4-lipgloss.Width(discussion))), discussion)
 }
 
 // shortPath fits a repository path to width by dropping leading directories
@@ -181,6 +195,11 @@ type PullRequestDiff struct {
 	diffs   map[string]fileDiff
 	loading map[string]bool
 
+	// threads is the discussion the detail view already fetched, handed over
+	// rather than fetched again. It is read-only here: this pane shows where
+	// the comments are, and replying to one is still the detail view's job.
+	threads []azdo.Thread
+
 	// generation counts refreshes. Bumped before Init re-fetches the file
 	// list, it is what lets fileDiffMsg tell a fetch issued before the refresh
 	// apart from one issued after — see fileDiffMsg's doc.
@@ -194,13 +213,14 @@ type PullRequestDiff struct {
 
 // NewPullRequestDiff builds the view. It fetches nothing itself — Init does
 // that — so it can be constructed without a client that can reach the network.
-func NewPullRequestDiff(c *azdo.Client, pr azdo.PullRequest) *PullRequestDiff {
+func NewPullRequestDiff(c *azdo.Client, pr azdo.PullRequest, threads []azdo.Thread) *PullRequestDiff {
 	m := &PullRequestDiff{
 		client:  c,
 		pr:      pr,
 		browser: NewBrowser(),
 		diffs:   map[string]fileDiff{},
 		loading: map[string]bool{},
+		threads: threads,
 		work:    newWork(),
 	}
 	m.browser.ListShare = diffListShare
@@ -241,9 +261,10 @@ func (m *PullRequestDiff) applyRows() {
 	rows := make([]Row, 0, len(m.changes))
 	for _, ch := range m.changes {
 		rows = append(rows, changeRow{
-			Change: ch,
-			url:    m.client.PullRequestFileURL(m.pr.Repo, m.pr.ID, ch.Path),
-			read:   m.diffs,
+			Change:  ch,
+			url:     m.client.PullRequestFileURL(m.pr.Repo, m.pr.ID, ch.Path),
+			read:    m.diffs,
+			threads: len(azdo.ThreadsForFile(m.threads, ch.Path)),
 		})
 	}
 	m.browser.SetRows(rows)
@@ -490,7 +511,7 @@ func (m *PullRequestDiff) renderDetail(row Row, width int) string {
 		// both commits: a mode change, or a merge that reverted it.
 		fmt.Fprintf(&b, "%s\n", chromeStyle.Render("(no textual changes)"))
 	default:
-		renderHunks(&b, d.hunks, width)
+		renderHunks(&b, d.hunks, azdo.ThreadsForFile(m.threads, r.Path), width)
 	}
 	return b.String()
 }
@@ -503,17 +524,67 @@ func changeLabel(changeType string) string {
 	return changeType
 }
 
+// diffLine is one rendered line's position in each side of the file. A line
+// belongs to one side or both: an insertion has no old-side number, a
+// deletion no new-side one, and context has both. Zero means "not on this
+// side", which no real line number ever is.
+type diffLine struct{ left, right int }
+
+// diffLineNumbers walks a hunk and says where each of its lines sits in the
+// old and new files.
+//
+// It is walked rather than counted because the two sides advance
+// independently: a deletion moves the old side on and leaves the new side
+// where it was, an insertion does the reverse. Anchoring a review comment to
+// a line means knowing the number the server would have written it against,
+// and that is the number the server counted this same way.
+//
+// It is a function of its own, returning positions rather than printing them,
+// so the arithmetic can be asserted directly. Getting it wrong would put a
+// comment under the wrong line of code, which reads as a correct pane saying
+// something false.
+func diffLineNumbers(h *udiff.Hunk) []diffLine {
+	out := make([]diffLine, 0, len(h.Lines))
+	left, right := h.FromLine, h.ToLine
+
+	for _, l := range h.Lines {
+		var pos diffLine
+		switch l.Kind {
+		case udiff.Insert:
+			pos.right = right
+			right++
+		case udiff.Delete:
+			pos.left = left
+			left++
+		default:
+			pos.left, pos.right = left, right
+			left++
+			right++
+		}
+		out = append(out, pos)
+	}
+	return out
+}
+
 // renderHunks writes a unified diff in the palette's colours: additions green,
 // deletions red, and each hunk header in the same label colour every other
 // section heading uses, so the headers read as structure rather than as content.
-func renderHunks(b *strings.Builder, hunks []*udiff.Hunk, width int) {
+//
+// threads are the review comments written against this file. Each is written
+// under the line it belongs to; the ones whose line the hunks never reach are
+// returned and written after, by the caller's own section, rather than being
+// dropped.
+func renderHunks(b *strings.Builder, hunks []*udiff.Hunk, threads []azdo.Thread, width int) {
+	shown := map[int]bool{}
+
 	for i, h := range hunks {
 		if i > 0 {
 			b.WriteString("\n")
 		}
 		fmt.Fprintf(b, "%s\n", labelStyle.Render(hunkHeader(h)))
 
-		for _, l := range h.Lines {
+		positions := diffLineNumbers(h)
+		for j, l := range h.Lines {
 			marker, style := diffLineStyle(l.Kind)
 
 			// Content keeps the newline it was split on; a line missing one is
@@ -523,6 +594,75 @@ func renderHunks(b *strings.Builder, hunks []*udiff.Hunk, width int) {
 			if !terminated {
 				fmt.Fprintf(b, "%s\n", chromeStyle.Render(`\ no newline at end of file`))
 			}
+
+			for _, t := range threadsAt(threads, positions[j]) {
+				shown[t.ID] = true
+				writeThread(b, t, width)
+			}
+		}
+	}
+
+	writeStrandedThreads(b, threads, shown, width)
+}
+
+// threadsAt picks the threads written against one rendered line, on whichever
+// side of the diff that line belongs to.
+func threadsAt(threads []azdo.Thread, pos diffLine) []azdo.Thread {
+	var out []azdo.Thread
+	for _, t := range threads {
+		if t.Line == 0 {
+			continue // a comment on the file as a whole, not on a line of it
+		}
+		side := pos.left
+		if t.RightSide {
+			side = pos.right
+		}
+		if side != 0 && side == t.Line {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// writeStrandedThreads writes the comments the hunks never reached: a line
+// outside the diff's context, or a comment on the file rather than on a line
+// of it. They are collected rather than dropped — a review that exists and is
+// not on screen is worse than one shown out of place, since nothing says it
+// is missing.
+func writeStrandedThreads(b *strings.Builder, threads []azdo.Thread, shown map[int]bool, width int) {
+	var stranded []azdo.Thread
+	for _, t := range threads {
+		if !shown[t.ID] {
+			stranded = append(stranded, t)
+		}
+	}
+	if len(stranded) == 0 {
+		return
+	}
+
+	fmt.Fprintf(b, "\n%s\n", labelStyle.Render("elsewhere in this file"))
+	for _, t := range stranded {
+		writeThread(b, t, width)
+	}
+}
+
+// writeThread writes one review thread under the code it belongs to, indented
+// so it reads as attached to the line above rather than as part of the diff.
+func writeThread(b *strings.Builder, t azdo.Thread, width int) {
+	marker := warnStyle.Render("● unresolved")
+	if t.Resolved {
+		marker = statusStyle.Render("✓ resolved")
+	}
+	where := ""
+	if t.Line > 0 {
+		where = chromeStyle.Render(fmt.Sprintf("  line %d", t.Line))
+	}
+	fmt.Fprintf(b, "    %s%s\n", marker, where)
+
+	for _, c := range t.Comments {
+		fmt.Fprintf(b, "    %s\n", labelStyle.Render(c.Author))
+		for _, l := range strings.Split(wordwrap(c.Text, max(20, width-6)), "\n") {
+			fmt.Fprintf(b, "      %s\n", truncate(l, max(10, width-6)))
 		}
 	}
 }

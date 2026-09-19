@@ -223,6 +223,13 @@ A binary file, or one over 256 KiB, says what it is instead of being rendered.
 A renamed file reads as a new one: the change entry names only where the file
 landed, so its previous content is at a path boardwalk cannot ask for.
 
+Review comments sit under the line they were written against, marked resolved
+or unresolved, and a file with discussion on it carries the count in the list
+beside its name. A comment whose line the diff's three lines of context never
+reach — or one written against the file rather than a line of it — is
+collected under "elsewhere in this file" rather than dropped. Replying and
+resolving stay on the detail pane behind `esc`; this one is for reading.
+
 Between them those two close the loop `b` opens: branch from a work item, and
 the work item knows about the pull request that branch became, and the pull
 request knows which work item it belongs to.
@@ -313,8 +320,6 @@ Features:
 - `--json` output, so a dump can be piped into something else
 - A watch mode that polls for pull requests newly waiting on you
 - Resolving review groups through the Graph API instead of naming them in the config
-- Anchoring a review thread to the diff line it was written against, which
-  `Thread.File` already carries enough information to do
 
 Known rough edges, none of them load-bearing:
 

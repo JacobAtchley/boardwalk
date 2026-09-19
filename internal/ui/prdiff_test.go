@@ -21,7 +21,7 @@ func newPRDiff(t *testing.T, changes ...azdo.Change) *runtimeView[*PullRequestDi
 	c, pr := prDetailFixture()
 	pr.SourceCommit, pr.TargetCommit = "source-sha", "target-sha"
 
-	r := drive(t, NewPullRequestDiff(c, pr), diffWidth, diffHeight)
+	r := drive(t, NewPullRequestDiff(c, pr, nil), diffWidth, diffHeight)
 	r.send(prChangesMsg{PR: pr.ID, Changes: changes})
 	return r
 }
@@ -252,7 +252,7 @@ func TestRenderHunksMarksALineWithNoTrailingNewline(t *testing.T) {
 	renderHunks(&b, []*udiff.Hunk{hunk(1, 1,
 		line(udiff.Delete, "last"),
 		line(udiff.Insert, "last\n"),
-	)}, 40)
+	)}, nil, 40)
 
 	if !strings.Contains(b.String(), `\ no newline at end of file`) {
 		t.Errorf("a line with no trailing newline was not marked:\n%s", b.String())
@@ -267,7 +267,7 @@ func TestRenderHunksExpandsTabsSoALineCannotOverflowThePane(t *testing.T) {
 	// measures a tab-indented line as shorter than it draws and the overflow
 	// lands in the list beside it.
 	var b strings.Builder
-	renderHunks(&b, []*udiff.Hunk{hunk(1, 1, line(udiff.Equal, "\t\treturn nil\n"))}, 40)
+	renderHunks(&b, []*udiff.Hunk{hunk(1, 1, line(udiff.Equal, "\t\treturn nil\n"))}, nil, 40)
 
 	if strings.Contains(b.String(), "\t") {
 		t.Errorf("a tab survived into the rendered diff:\n%q", b.String())
@@ -387,7 +387,7 @@ func TestPullRequestDiffSaysWhenAFilesTextIsUnchanged(t *testing.T) {
 
 func TestPullRequestDiffOnAPullRequestWithNoComputedMerge(t *testing.T) {
 	c, pr := prDetailFixture() // no SourceCommit or TargetCommit
-	r := drive(t, NewPullRequestDiff(c, pr), diffWidth, diffHeight)
+	r := drive(t, NewPullRequestDiff(c, pr, nil), diffWidth, diffHeight)
 	r.send(prChangesMsg{PR: pr.ID})
 
 	if !strings.Contains(r.frame(), "has not computed") {
@@ -406,7 +406,7 @@ func TestPullRequestDiffOnAPullRequestChangingNothing(t *testing.T) {
 func TestPullRequestDiffReportsAFailedListing(t *testing.T) {
 	c, pr := prDetailFixture()
 	pr.SourceCommit, pr.TargetCommit = "source-sha", "target-sha"
-	r := drive(t, NewPullRequestDiff(c, pr), diffWidth, diffHeight)
+	r := drive(t, NewPullRequestDiff(c, pr, nil), diffWidth, diffHeight)
 	r.send(prChangesMsg{PR: pr.ID, Err: errTest})
 
 	if status, failed := r.view.Status(); !failed || !strings.Contains(status, errTest.Error()) {
@@ -555,7 +555,7 @@ func TestDiffedLinesComeThroughAsHunks(t *testing.T) {
 	}
 
 	var b strings.Builder
-	renderHunks(&b, unified.Hunks, 40)
+	renderHunks(&b, unified.Hunks, nil, 40)
 	got := b.String()
 
 	if !strings.Contains(got, "-two") {
@@ -583,7 +583,7 @@ func TestALineWhoseNeighbourChangedStaysContext(t *testing.T) {
 	}
 
 	var b strings.Builder
-	renderHunks(&b, unified.Hunks, 40)
+	renderHunks(&b, unified.Hunks, nil, 40)
 	got := b.String()
 
 	if strings.Contains(got, "-three") {

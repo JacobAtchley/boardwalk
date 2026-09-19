@@ -99,10 +99,42 @@ type Thread struct {
 	ID       int
 	Status   string
 	Resolved bool
-	// File is set when the thread is anchored to a line of the diff rather
+	// File is set when the thread is anchored to a file of the diff rather
 	// than to the pull request as a whole.
-	File     string
-	Comments []ThreadComment
+	File string
+	// Line is the line within File the thread was written against, or 0 for
+	// a thread on the file as a whole. RightSide says which side of the diff
+	// that line is numbered by: the new file, or — for a comment on text the
+	// pull request removed — the old one.
+	//
+	// A thread on a line that was changed rather than added carries both
+	// sides, and the new one is taken. It is where the reader is looking,
+	// and it is the side the diff pane numbers its own lines by.
+	Line      int
+	RightSide bool
+	Comments  []ThreadComment
+}
+
+// ThreadsForFile picks out the threads written against one file, in the order
+// the server listed them.
+//
+// The paths are compared without their leading slash. Azure DevOps writes one
+// on both a thread's filePath and a change's path, so they match as they
+// stand — but a mismatch there would show up as a file with no discussion
+// rather than as an error, which is the kind of thing nobody notices.
+func ThreadsForFile(threads []Thread, path string) []Thread {
+	path = strings.TrimPrefix(path, "/")
+	if path == "" {
+		return nil
+	}
+
+	var out []Thread
+	for _, t := range threads {
+		if strings.TrimPrefix(t.File, "/") == path {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // Opener is the comment a thread starts with, which is what a summary shows.
@@ -208,6 +240,14 @@ func (v pullRequestJSON) pullRequest() PullRequest {
 	return pr
 }
 
+// threadPosition is one end of the range a review comment was written
+// against. Only the line is read: the column is what the web UI uses to
+// underline part of a line, and a terminal pane showing whole lines has
+// nothing to do with it.
+type threadPosition struct {
+	Line int `json:"line"`
+}
+
 // Threads summarises one pull request's comment threads.
 func (c *Client) Threads(repoID string, prID int) ([]Thread, error) {
 	var resp struct {
@@ -216,7 +256,9 @@ func (c *Client) Threads(repoID string, prID int) ([]Thread, error) {
 			Status    string `json:"status"`
 			IsDeleted bool   `json:"isDeleted"`
 			Context   *struct {
-				FilePath string `json:"filePath"`
+				FilePath   string          `json:"filePath"`
+				LeftStart  *threadPosition `json:"leftFileStart"`
+				RightStart *threadPosition `json:"rightFileStart"`
 			} `json:"threadContext"`
 			Comments []struct {
 				ID          int       `json:"id"`
@@ -251,6 +293,12 @@ func (c *Client) Threads(repoID string, prID int) ([]Thread, error) {
 		thread := Thread{ID: t.ID, Status: t.Status, Resolved: resolvedStatus(t.Status)}
 		if t.Context != nil {
 			thread.File = t.Context.FilePath
+			switch {
+			case t.Context.RightStart != nil:
+				thread.Line, thread.RightSide = t.Context.RightStart.Line, true
+			case t.Context.LeftStart != nil:
+				thread.Line = t.Context.LeftStart.Line
+			}
 		}
 		for _, cm := range t.Comments {
 			if cm.CommentType == "system" {
