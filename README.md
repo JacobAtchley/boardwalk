@@ -400,6 +400,13 @@ against, the Graph walk resolved 35 groups and not one of the ones actually
 used as pull request reviewers; the identity expansion returns all 74. It is
 also five requests at startup rather than about seventy.
 
+**A CRLF file leaves a carriage return on every line.** Splitting a file on
+`\n` keeps the `\r`, and a terminal reading one returns the cursor to column
+zero — so the padding written after the text would overwrite the text.
+Bubbles strips control characters before it paints, which made this invisible
+rather than broken, but the pane's correctness should not rest on that. The
+file view drops the carriage return where it splits the lines.
+
 **The build log's `startLine` parameter is undocumented as 0- or 1-based.**
 Azure DevOps's reference calls it only "the start line." boardwalk treats it
 as a 0-based offset equal to the number of lines already consumed on each
@@ -486,12 +493,6 @@ what Azure DevOps does with it:
   reason the check exists still holds.
 - Whether an empty `System.AssignedTo` unassigns rather than failing validation.
   Unreachable in normal use: both call sites refuse to send an empty assignee.
-- Whether `POST .../threads` accepts the `threadContext` boardwalk sends for a
-  review comment — a `filePath` with `rightFileStart` and `rightFileEnd` both
-  at column one of the commented line. **Worth writing one comment on a
-  throwaway pull request before relying on `c`**: the shape is from the
-  reference rather than from a live tenant, and a rejection here is the one
-  that loses something you typed.
 - Whether every identity provider puts the same GUID on a reviewer entry as
   the Identities API reports for the group. Against the one live tenant this
   has been run on they match exactly, for both an Azure DevOps group and an

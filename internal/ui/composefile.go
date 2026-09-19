@@ -136,14 +136,27 @@ func nextRight(h *udiff.Hunk, positions []diffLine, i int) int {
 }
 
 // splitLines breaks a file into its lines without inventing a last empty one
-// for the trailing newline nearly every file ends with.
+// for the trailing newline nearly every file ends with, and without the
+// carriage return a CRLF file leaves on the end of each.
 func splitLines(text string) []string {
 	if text == "" {
 		return nil
 	}
-	return strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimSuffix(l, "\r")
+	}
+	return lines
 }
 
-// trimNewline drops the newline a hunk line was split on. A line without one
-// is the last line of a file that does not end with one.
-func trimNewline(s string) string { return strings.TrimSuffix(s, "\n") }
+// trimNewline drops the line ending a hunk line was split on. A line without
+// one is the last line of a file that does not end with one.
+//
+// The carriage return goes with it. It is not part of the line: a terminal
+// reading one returns the cursor to column zero, so the padding written after
+// the text would overwrite the text. Bubbles strips control characters before
+// it paints, which is why leaving it on was invisible rather than broken —
+// but a pane's correctness should not rest on that.
+func trimNewline(s string) string {
+	return strings.TrimSuffix(strings.TrimSuffix(s, "\n"), "\r")
+}
