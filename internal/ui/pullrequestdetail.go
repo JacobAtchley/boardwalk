@@ -48,6 +48,15 @@ type threadResolvedMsg struct {
 	Err      error
 }
 
+// gateBuildsMsg carries the runs this pull request's build validation
+// policies produced. It names its pull request for the same reason
+// threadsLoadedMsg does: Root broadcasts data to every view in the stack.
+type gateBuildsMsg struct {
+	PR    int
+	Gates []azdo.GateBuild
+	Err   error
+}
+
 // voteCastMsg carries the outcome of casting a reviewer vote.
 type voteCastMsg struct {
 	PR         int
@@ -133,6 +142,20 @@ type PullRequestDetail struct {
 	// considered, so there is nothing left to arm a vote while it is open.
 	armedVote *pendingVote
 
+	// gatesPending is true while a build gate lookup is in flight, so a
+	// second press does not start another, and a late answer knows whether
+	// it is still the one being waited on.
+	gatesPending bool
+
+	// hidden is true from the moment this view pushes something on top of
+	// itself until it is back on top. Root broadcasts gateBuildsMsg to the
+	// whole stack, so a lookup that resolves while the diff pane is showing
+	// must not push the build list over it. A KeyMsg is proof of being back
+	// on top — Root routes keys to the top view alone — so the flag clears
+	// the moment one arrives. Same arrangement as the builds view; see its
+	// hidden field.
+	hidden bool
+
 	// armedDraft is the same arrangement for the draft toggle, and for the
 	// same reason — see draft.go. No two of the three modal states can be
 	// open at once: each of them swallows every key that is not its own
@@ -185,6 +208,42 @@ func (m *PullRequestDetail) fetchThreads() tea.Cmd {
 
 // fetchLinked resolves the work items this pull request is attached to. The
 // endpoint returns bare ids, so the titles come from one batch fetch.
+// fetchGateBuilds reads the runs this pull request's build validation
+// policies produced. It is asked for on the keypress rather than fetched on
+// entry, the same reasoning the builds view gives for its pull request link:
+// most visits to this pane never ask, and the evaluations are a call of their
+// own.
+func (m *PullRequestDetail) fetchGateBuilds() tea.Cmd {
+	client, pr := m.client, m.pr
+	return func() tea.Msg {
+		gates, err := client.PullRequestGateBuilds(pr)
+		if err != nil {
+			return gateBuildsMsg{PR: pr.ID, Err: fmt.Errorf("could not load the build gates for !%d: %w", pr.ID, err)}
+		}
+		return gateBuildsMsg{PR: pr.ID, Gates: gates}
+	}
+}
+
+// gateBuildIDs is the runs, in the order the policies came back in.
+func gateBuildIDs(gates []azdo.GateBuild) []int {
+	ids := make([]int, 0, len(gates))
+	for _, g := range gates {
+		ids = append(ids, g.BuildID)
+	}
+	return ids
+}
+
+// gateSummary is the status line the build list is opened with. The policy
+// verdict is worth carrying over because it is not the build's: a rejected
+// gate whose run succeeded means the policy was evaluated against an earlier
+// iteration, and the build list alone would show nothing but a green run.
+func gateSummary(gates []azdo.GateBuild) string {
+	if len(gates) == 1 {
+		return fmt.Sprintf("%s: %s", gates[0].Policy, gates[0].Status)
+	}
+	return fmt.Sprintf("%d build gates", len(gates))
+}
+
 func (m *PullRequestDetail) fetchLinked() tea.Cmd {
 	client, repo, id := m.client, m.pr.RepoID, m.pr.ID
 	return func() tea.Msg {
@@ -445,11 +504,39 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.invalidate()
 		return m, nil
 
+	case gateBuildsMsg:
+		m.work.done()
+		if msg.PR != m.pr.ID || !m.gatesPending {
+			// Either an answer for the other pull request this stack can have
+			// open, or one this view is no longer waiting on.
+			return m, nil
+		}
+		m.gatesPending = false
+		if msg.Err != nil {
+			m.status, m.failed = msg.Err.Error(), true
+			return m, nil
+		}
+		if len(msg.Gates) == 0 {
+			m.status, m.failed = fmt.Sprintf("no build policy has run for !%d", m.pr.ID), false
+			return m, nil
+		}
+		if m.hidden {
+			// The lookup was still in flight when the user opened something
+			// else — see the hidden field's doc.
+			return m, nil
+		}
+		m.status, m.failed = gateSummary(msg.Gates), false
+		builds := NewBuildsForPullRequest(m.client, m.pr.ID, gateBuildIDs(msg.Gates))
+		return m, func() tea.Msg { return PushMsg{View: builds} }
+
 	case StatusMsg:
 		m.status = msg.Text
 		return m, nil
 
 	case tea.KeyMsg:
+		// A key is proof this view is back on top: Root routes keys to the
+		// top view alone.
+		m.hidden = false
 		// The reply prompt owns every key while it is open, including esc and
 		// the letters that are otherwise actions — typing "o" into it must add
 		// the letter, not open a browser. Mirrors the branch prompt in
@@ -519,13 +606,22 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 			// and the diff pane shows each comment against the line it was
 			// written on rather than fetching the same threads again.
 			diff := NewPullRequestDiff(m.client, m.pr, m.threads)
+			m.hidden = true
 			return m, func() tea.Msg { return PushMsg{View: diff} }
+		case key.Matches(msg, keyGateBuilds):
+			if m.gatesPending {
+				return m, nil // already looking them up
+			}
+			m.gatesPending = true
+			m.status, m.failed = "looking for the build gates…", false
+			return m, tea.Batch(m.fetchGateBuilds(), m.work.begin(1))
 		case key.Matches(msg, keyLinkedItem):
 			if len(m.linked) == 0 {
 				m.status = "no work items are linked to this pull request"
 				return m, nil
 			}
 			item := NewItem(m.client, m.linked[0], nil)
+			m.hidden = true
 			return m, func() tea.Msg { return PushMsg{View: item} }
 		case key.Matches(msg, keyReply):
 			t, ok := m.selectedThread()
@@ -740,13 +836,13 @@ func (m *PullRequestDetail) Title() string {
 // keys_test.go, which renders every view's footer through the real help
 // component rather than trusting a character count.
 func (m *PullRequestDetail) Keys() help.KeyMap {
-	short := []key.Binding{keyDiff, keyLinkedItem, keyReply, keyResolve}
+	short := []key.Binding{keyDiff, keyGateBuilds, keyReply, keyResolve}
 	// The draft toggle is in the panel rather than on the footer, labelled for
 	// the pull request it is looking at — "publish" on a draft, "mark draft"
 	// on a published one — and absent altogether on a merged or abandoned one,
 	// which this view reaches through a work item's or a build's link. Offering
 	// a key that would only be refused is worse than not offering it.
-	full := []key.Binding{keyDiff, keyLinkedItem, keyReply, keyResolve}
+	full := []key.Binding{keyDiff, keyGateBuilds, keyLinkedItem, keyReply, keyResolve}
 	if draftable(m.pr) {
 		full = append(full, draftBinding(m.pr.IsDraft))
 	}
