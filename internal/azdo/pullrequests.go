@@ -59,10 +59,10 @@ func (r Reviewer) VoteLabel() string {
 
 // PullRequest is one active pull request, in any repository in the project.
 type PullRequest struct {
-	ID        int
-	Title     string
-	Repo      string
-	RepoID    string
+	ID     int
+	Title  string
+	Repo   string
+	RepoID string
 	// ProjectID is the GUID of the team project the repository belongs to.
 	// The project is known by name everywhere else in boardwalk, but the
 	// policy endpoint addresses a pull request by an artifact id built from
