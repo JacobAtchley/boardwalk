@@ -30,6 +30,13 @@ func TestPullRequestGateBuildsKeepsTheBuildsAPolicyHasRun(t *testing.T) {
 		if !strings.Contains(r.URL.Path, "/_apis/policy/evaluations") {
 			t.Errorf("path = %q, want the policy evaluations endpoint", r.URL.Path)
 		}
+		// Azure DevOps refuses this endpoint at a plain version: "The
+		// requested version "7.1" of the resource is under preview. The
+		// -preview flag must be supplied in the api-version for such
+		// requests."
+		if got := r.URL.Query().Get("api-version"); !strings.HasSuffix(got, "-preview.1") {
+			t.Errorf("api-version = %q, want the preview form the endpoint requires", got)
+		}
 		w.Write([]byte(gateBody))
 	})
 

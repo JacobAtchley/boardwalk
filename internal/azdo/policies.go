@@ -11,6 +11,15 @@ import (
 // that runs a pipeline, so it is the only one that can name a build.
 const buildPolicyTypeID = "0609b952-1397-4640-95ec-e00a01b2c241"
 
+// evaluationsAPIVersion is APIVersion's preview twin for this endpoint, the
+// same arrangement connectionData needs. Policy evaluations are still under
+// preview, and asking for a plain version is refused outright: "The requested
+// version \"7.1\" of the resource is under preview. The -preview flag must be
+// supplied in the api-version for such requests." The .1 is the revision the
+// shape read below belongs to; a bare -preview is accepted too, but pinning
+// the revision is the point of pinning the version at all.
+const evaluationsAPIVersion = APIVersion + "-preview.1"
+
 // unnamedPolicy is what a build validation with no display name is called. A
 // policy is named when it is configured and most are, but an unnamed one still
 // gates the pull request and still has a run worth opening.
@@ -57,7 +66,7 @@ func (c *Client) PullRequestGateBuilds(pr PullRequest) ([]GateBuild, error) {
 	artifact := fmt.Sprintf("vstfs:///CodeReview/CodeReviewId/%s/%d", pr.ProjectID, pr.ID)
 	endpoint := fmt.Sprintf("%s/%s/%s/_apis/policy/evaluations?artifactId=%s&api-version=%s",
 		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project),
-		url.QueryEscape(artifact), APIVersion)
+		url.QueryEscape(artifact), evaluationsAPIVersion)
 	if err := c.get(endpoint, &resp); err != nil {
 		return nil, err
 	}
