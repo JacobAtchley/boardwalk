@@ -695,3 +695,71 @@ func TestVoteCastIgnoresAnotherPullRequests(t *testing.T) {
 		t.Error("a vote belonging to another pull request was applied")
 	}
 }
+
+func TestPullRequestDetailOpensTheGateBuilds(t *testing.T) {
+	m := newPRDetail(t, []azdo.Thread{})
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
+	m = updated.(*PullRequestDetail)
+	if cmd == nil {
+		t.Fatal("B produced no command")
+	}
+	if status, _ := m.Status(); !strings.Contains(status, "build gate") {
+		t.Errorf("status = %q, want it to say the gates are being looked up", status)
+	}
+
+	updated, cmd = m.Update(gateBuildsMsg{PR: 512, Gates: []azdo.GateBuild{{BuildID: 9001, Policy: "CI gate", Status: "rejected"}}})
+	m = updated.(*PullRequestDetail)
+	if cmd == nil {
+		t.Fatal("the gate answer produced no command")
+	}
+	push, ok := cmd().(PushMsg)
+	if !ok {
+		t.Fatalf("the gate answer produced %T, want a PushMsg", cmd())
+	}
+	if !strings.Contains(push.View.Title(), "!512") {
+		t.Errorf("pushed view = %q, want the pull request's build list", push.View.Title())
+	}
+}
+
+func TestPullRequestDetailSaysWhenNothingGatesIt(t *testing.T) {
+	m := newPRDetail(t, []azdo.Thread{})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
+
+	updated, cmd := m.Update(gateBuildsMsg{PR: 512})
+	m = updated.(*PullRequestDetail)
+	if cmd != nil {
+		t.Errorf("a pull request with no gates pushed a view anyway")
+	}
+	if status, _ := m.Status(); !strings.Contains(status, "no build") {
+		t.Errorf("status = %q, want it to say there is nothing gating this pull request", status)
+	}
+}
+
+func TestPullRequestDetailIgnoresAGateAnswerForAnotherPullRequest(t *testing.T) {
+	// Root broadcasts data to every view in the stack, and two of these can be
+	// open at once — see replySentMsg.
+	m := newPRDetail(t, []azdo.Thread{})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
+
+	_, cmd := m.Update(gateBuildsMsg{PR: 999, Gates: []azdo.GateBuild{{BuildID: 1}}})
+	if cmd != nil {
+		t.Error("an answer for another pull request pushed a view")
+	}
+}
+
+func TestPullRequestDetailDoesNotJumpToGatesFromUnderAnotherView(t *testing.T) {
+	m := newPRDetail(t, nil)
+	m.pr.SourceCommit, m.pr.TargetCommit = "aaa", "bbb"
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
+	m = updated.(*PullRequestDetail)
+	// The diff pane goes on top while the lookup is still in flight.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	m = updated.(*PullRequestDetail)
+
+	_, cmd := m.Update(gateBuildsMsg{PR: 512, Gates: []azdo.GateBuild{{BuildID: 9001}}})
+	if cmd != nil {
+		t.Error("the gate answer pushed a view over the one the user had opened")
+	}
+}

@@ -602,3 +602,20 @@ func TestCreateThreadReportsTheServersRefusal(t *testing.T) {
 		t.Errorf("error = %v, want the server's own message in it", err)
 	}
 }
+
+func TestPullRequestParsesTheProjectItsRepositoryBelongsTo(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"value":[
+ {"pullRequestId":512,"title":"Retry webhooks","sourceRefName":"refs/heads/x","targetRefName":"refs/heads/main",
+  "creationDate":"2026-09-10T09:00:00Z","createdBy":{"displayName":"Dev","uniqueName":"dev@acme.test"},
+  "repository":{"id":"r1","name":"platform-api","project":{"id":"p-guid","name":"Platform"}}}]}`))
+	})
+
+	prs, err := c.PullRequests()
+	if err != nil {
+		t.Fatalf("PullRequests returned %v", err)
+	}
+	if prs[0].ProjectID != "p-guid" {
+		t.Errorf("project id = %q, want p-guid", prs[0].ProjectID)
+	}
+}

@@ -79,6 +79,19 @@ type timelineMsg struct {
 	Err      error
 }
 
+// gateRunsMsg carries the runs behind one pull request's build gates. It is
+// its own message rather than a buildsMsg because both listings can be alive
+// at once — the project's recent runs underneath, one pull request's gates on
+// top — and Root broadcasts data to every view in the stack. It names the
+// pull request for the same reason timelineMsg names its build, and carries
+// Err rather than emitting ErrMsg, which has no owner to route on and would
+// be read by the project list as its own fetch failing.
+type gateRunsMsg struct {
+	PR     int
+	Builds []azdo.Build
+	Err    error
+}
+
 // buildPRMsg carries the outcome of looking up the pull request a build ran
 // for. It names the build for the same reason timelineMsg does: pressing p
 // again for a different build before the first lookup answers must not let
@@ -115,6 +128,16 @@ type Builds struct {
 	// list when it closes: a refresh landing in between rebuilds the rows.
 	queueDefinition int
 	queueLabel      string
+
+	// prID and gateBuilds are set when this list was opened from a pull
+	// request's build gates rather than from the menu: the pull request it
+	// belongs to, and the runs its gates produced. gateBuilds is what Init
+	// fetches instead of the project's recent runs, and it is fixed for the
+	// life of the view — a gate that starts a fresh run after this list
+	// opened is picked up by reopening it from the pull request, which is
+	// where the policy evaluations are read.
+	prID       int
+	gateBuilds []int
 
 	// linkBuild is the id of the build a pull request lookup is in flight
 	// for, or 0 when none is. It is how a late answer knows whether it is
@@ -156,8 +179,23 @@ func NewBuilds(c *azdo.Client) *Builds {
 	return m
 }
 
-// Init fetches the project's recent runs.
+// NewBuildsForPullRequest opens the same browser over one pull request's gate
+// runs. The ids come from the policy evaluations the pull request view read,
+// so this fetches each run by id rather than filtering the project's recent
+// ones: a gate that ran days ago is still the gate on this pull request, and
+// would have fallen off the end of a fixed-size listing.
+func NewBuildsForPullRequest(c *azdo.Client, prID int, ids []int) *Builds {
+	m := NewBuilds(c)
+	m.prID, m.gateBuilds = prID, ids
+	return m
+}
+
+// Init fetches the project's recent runs, or the gate runs this list was
+// opened for.
 func (m *Builds) Init() tea.Cmd {
+	if len(m.gateBuilds) > 0 {
+		return tea.Batch(m.fetchGateBuilds(), m.work.begin(1))
+	}
 	client := m.client
 	fetch := func() tea.Msg {
 		builds, err := client.Builds(buildPageSize)
@@ -167,6 +205,30 @@ func (m *Builds) Init() tea.Cmd {
 		return buildsMsg{Builds: builds}
 	}
 	return tea.Batch(fetch, m.work.begin(1))
+}
+
+// fetchGateBuilds reads each gate run by id. They are fetched in one command
+// rather than one each so the list appears whole: a handful of gates is a
+// short serial walk, and rows arriving one at a time would reorder the list
+// under the cursor as each answer landed.
+func (m *Builds) fetchGateBuilds() tea.Cmd {
+	client, prID, ids := m.client, m.prID, m.gateBuilds
+	return func() tea.Msg { return gateRuns(prID, ids, client.BuildByID) }
+}
+
+// gateRuns reads each gate run and folds the outcome into one answer. The
+// fetch is a parameter rather than the client so this — the part that decides
+// what the list is told — can be exercised without a server.
+func gateRuns(prID int, ids []int, fetch func(int) (azdo.Build, error)) gateRunsMsg {
+	builds := make([]azdo.Build, 0, len(ids))
+	for _, id := range ids {
+		b, err := fetch(id)
+		if err != nil {
+			return gateRunsMsg{PR: prID, Err: fmt.Errorf("could not fetch build %d: %w", id, err)}
+		}
+		builds = append(builds, b)
+	}
+	return gateRunsMsg{PR: prID, Builds: builds}
 }
 
 // applyRows rebuilds the browser's rows, carrying forward whatever timelines
@@ -268,7 +330,25 @@ func (m *Builds) Update(msg tea.Msg) (View, tea.Cmd) {
 		return m, m.work.tick(msg)
 
 	case buildsMsg:
+		if m.prID != 0 {
+			// The project's recent runs, broadcast to a list that is showing
+			// one pull request's gates. See gateRunsMsg.
+			return m, nil
+		}
 		m.work.done()
+		m.builds, m.loaded = msg.Builds, true
+		m.applyRows()
+		return m, m.fetchTimelines()
+
+	case gateRunsMsg:
+		if m.prID == 0 || msg.PR != m.prID {
+			return m, nil
+		}
+		m.work.done()
+		if msg.Err != nil {
+			m.status, m.failed = msg.Err.Error(), true
+			return m, nil
+		}
 		m.builds, m.loaded = msg.Builds, true
 		m.applyRows()
 		return m, m.fetchTimelines()
@@ -507,9 +587,17 @@ func (m *Builds) Body(width, height int) string {
 		return placeholder("builds", m.status, m.failed, m.work.View())
 	}
 	if m.browser.Len() == 0 {
-		return emptyState("no pipeline runs in this project", width, height)
+		return emptyState(m.emptyLine(), width, height)
 	}
 	return m.browser.View()
+}
+
+// emptyLine says what is missing in the terms the list was opened in.
+func (m *Builds) emptyLine() string {
+	if m.prID != 0 {
+		return fmt.Sprintf("no gate runs left to show for !%d", m.prID)
+	}
+	return "no pipeline runs in this project"
 }
 
 // refresh re-reads the list from scratch, dropping every timeline with it so
@@ -566,8 +654,14 @@ func (m *Builds) handleArmedBuild(msg tea.KeyMsg) tea.Cmd {
 	return armed.fire(m.client)
 }
 
-// Title reports the run count and the project the builds belong to.
+// Title reports the run count and the project the builds belong to, naming
+// the pull request when the list is one pull request's gates rather than the
+// project's recent runs.
 func (m *Builds) Title() string {
+	if m.prID != 0 {
+		return fmt.Sprintf("build gates for !%d (%d) · %s/%s",
+			m.prID, m.browser.Len(), m.client.Org, m.client.Project)
+	}
 	return fmt.Sprintf("builds (%d) · %s/%s", m.browser.Len(), m.client.Org, m.client.Project)
 }
 

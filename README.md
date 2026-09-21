@@ -185,6 +185,7 @@ listed newest first.
 | key | |
 |---|---|
 | `enter` | open the full pull request |
+| `B` | from an opened pull request, the runs its build gates produced |
 | `v` | only pull requests waiting on your review |
 | `d` | cycle drafts hidden → drafts only → all |
 | `P` | publish a draft, or put a published pull request back into draft |
@@ -204,6 +205,17 @@ discussion — whole threads, not just the line each one opens with — unresolv
 first. `w` opens the first linked work item. `c` replies to the first
 unresolved thread and `R` resolves it, both without leaving the view. `D` opens
 the diff.
+
+`B` opens the runs behind the pull request's build gates — the build list
+again, over those runs rather than the project's recent ones, so `enter`
+reads the failing gate's logs and `Q` re-runs it from there. The runs come
+from the pull request's policy evaluations rather than from a branch search,
+which is what makes them the gates rather than whatever happened to build
+that branch: a gate that has not started a run yet is left out, and a pull
+request nothing gates says so on the status line instead of opening an empty
+list. The status line carries the policy's own verdict over with it, because
+it is not the build's — a rejected gate over a green run means the policy was
+evaluated against an earlier iteration.
 
 `A` approves, `W` waits for the author and `X` rejects, each on a second press
 of the same key. They show when the pull request is yours to vote on — named

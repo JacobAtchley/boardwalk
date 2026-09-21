@@ -63,6 +63,11 @@ type PullRequest struct {
 	Title     string
 	Repo      string
 	RepoID    string
+	// ProjectID is the GUID of the team project the repository belongs to.
+	// The project is known by name everywhere else in boardwalk, but the
+	// policy endpoint addresses a pull request by an artifact id built from
+	// the GUID, and the name will not do there.
+	ProjectID string
 	Author    string
 	AuthorKey string // uniqueName, lowercased, compared against Client.Me
 	IsDraft   bool
@@ -193,8 +198,11 @@ type pullRequestJSON struct {
 		UniqueName  string `json:"uniqueName"`
 	} `json:"createdBy"`
 	Repository struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Project struct {
+			ID string `json:"id"`
+		} `json:"project"`
 	} `json:"repository"`
 	LastMergeSourceCommit struct {
 		CommitID string `json:"commitId"`
@@ -217,6 +225,7 @@ func (v pullRequestJSON) pullRequest() PullRequest {
 		Title:        v.Title,
 		Repo:         v.Repository.Name,
 		RepoID:       v.Repository.ID,
+		ProjectID:    v.Repository.Project.ID,
 		Author:       v.CreatedBy.DisplayName,
 		AuthorKey:    strings.ToLower(v.CreatedBy.UniqueName),
 		IsDraft:      v.IsDraft,

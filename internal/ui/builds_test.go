@@ -381,3 +381,113 @@ func TestBuildsEmptyStateSaysThereAreNoRuns(t *testing.T) {
 		t.Errorf("empty view did not draw the gulls:\n%s", out)
 	}
 }
+
+func TestBuildsForAPullRequestNamesItInTheTitle(t *testing.T) {
+	c, builds := buildFixture()
+	m := NewBuildsForPullRequest(c, 512, []int{9001, 9000})
+	updated, _ := m.Update(gateRunsMsg{PR: 512, Builds: builds})
+	m = updated.(*Builds)
+
+	if !strings.Contains(m.Title(), "!512") {
+		t.Errorf("title = %q, want it to name the pull request", m.Title())
+	}
+	if !strings.Contains(m.Title(), "(2)") {
+		t.Errorf("title = %q, want the run count", m.Title())
+	}
+}
+
+func TestBuildsForAPullRequestOpensOnTheGateRunsItWasGiven(t *testing.T) {
+	c, _ := buildFixture()
+	m := NewBuildsForPullRequest(c, 512, []int{9001})
+
+	if got := m.gateBuilds; len(got) != 1 || got[0] != 9001 {
+		t.Errorf("gate builds = %v, want the ids it was opened with", got)
+	}
+}
+
+func TestBuildsForAPullRequestSaysSoWhenEmpty(t *testing.T) {
+	c, _ := buildFixture()
+	m := NewBuildsForPullRequest(c, 512, []int{9001})
+	updated, _ := m.Update(gateRunsMsg{PR: 512})
+	m = updated.(*Builds)
+
+	if body := m.Body(120, 20); !strings.Contains(body, "!512") {
+		t.Errorf("empty state = %q, want it to name the pull request", body)
+	}
+}
+
+func TestBuildsForAPullRequestReportsItsOwnFetchFailing(t *testing.T) {
+	c, _ := buildFixture()
+	m := NewBuildsForPullRequest(c, 512, []int{9001})
+	updated, _ := m.Update(gateRunsMsg{PR: 512, Err: errTest})
+	m = updated.(*Builds)
+
+	status, isErr := m.Status()
+	if !isErr || !strings.Contains(status, errTest.Error()) {
+		t.Errorf("status = %q, isErr = %v, want the failure reported", status, isErr)
+	}
+}
+
+// The gate list and the project list can both be alive in one stack — menu,
+// builds, p, then B from the pull request it opened — and Root broadcasts
+// data to every view in it. Each listing must land in exactly one of them.
+func TestBuildsForAPullRequestIgnoresTheProjectListing(t *testing.T) {
+	c, builds := buildFixture()
+	m := NewBuildsForPullRequest(c, 512, []int{9001})
+	updated, _ := m.Update(buildsMsg{Builds: builds})
+	m = updated.(*Builds)
+
+	if m.loaded {
+		t.Errorf("the gate list took the project's recent runs as its own:\n%s", m.Body(120, 20))
+	}
+}
+
+func TestBuildsIgnoresGateRunsThatAreNotItsOwn(t *testing.T) {
+	c, builds := buildFixture()
+
+	project := newBuilds(t)
+	updated, _ := project.Update(gateRunsMsg{PR: 512, Builds: builds[:1]})
+	project = updated.(*Builds)
+	if project.browser.Len() != 2 {
+		t.Errorf("the project list took a gate listing: %d rows, want its own 2", project.browser.Len())
+	}
+
+	gates := NewBuildsForPullRequest(c, 512, []int{9001})
+	updated, _ = gates.Update(gateRunsMsg{PR: 999, Builds: builds})
+	gates = updated.(*Builds)
+	if gates.loaded {
+		t.Error("the gate list took another pull request's gate runs")
+	}
+}
+
+// The gate list is the one Builds instance Root does not build, so the
+// property that makes a second instance safe is asserted here rather than
+// assumed: every answer it reads back names the pull request it belongs to,
+// including a failed one. An ErrMsg would name nobody and be read by the
+// project list as its own fetch failing.
+func TestGateRunsAnswerNamesThePullRequestEvenWhenTheFetchFails(t *testing.T) {
+	_, builds := buildFixture()
+
+	got := gateRuns(512, []int{9001, 9000}, func(id int) (azdo.Build, error) {
+		for _, b := range builds {
+			if b.ID == id {
+				return b, nil
+			}
+		}
+		return azdo.Build{}, errTest
+	})
+	if got.PR != 512 || got.Err != nil || len(got.Builds) != 2 {
+		t.Fatalf("gateRuns = %+v, want !512's two runs and no error", got)
+	}
+
+	got = gateRuns(512, []int{7}, func(int) (azdo.Build, error) { return azdo.Build{}, errTest })
+	if got.PR != 512 {
+		t.Errorf("a failed answer names !%d, want !512", got.PR)
+	}
+	if got.Err == nil {
+		t.Error("a failed fetch reported no error")
+	}
+	if got.Builds != nil {
+		t.Errorf("a failed fetch returned %d runs, want none", len(got.Builds))
+	}
+}

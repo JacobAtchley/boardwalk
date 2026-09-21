@@ -344,11 +344,18 @@ func TestRootBroadcastsErrMsgToTheViewItBelongsToEvenWhenNotOnTop(t *testing.T) 
 // emit ErrMsg with no id naming which instance it belongs to, which is only
 // safe to broadcast because exactly one instance of each is ever alive in a
 // stack — every one is built once, by Root.build, from an empty stack (see
-// NewRoot and the menu's enter handler in Root.key). A ninth feature that
-// pushed a second instance of one of these three views — a work item view
-// reachable from inside another view's drill-down, say — would make a
-// broadcast ErrMsg ambiguous between two live views and resurrect the very
-// bug the broadcast was written to fix, silently.
+// NewRoot and the menu's enter handler in Root.key). A feature that pushed a
+// second instance of one of these three views — a work item view reachable
+// from inside another view's drill-down, say — would make a broadcast ErrMsg
+// ambiguous between two live views and resurrect the very bug the broadcast
+// was written to fix, silently.
+//
+// NewBuildsForPullRequest is the one exception, and it earns it by not
+// relying on the invariant at all: a build list opened on a pull request's
+// gates fetches through gateRunsMsg, which names its pull request, ignores
+// the project listing, and reports its own failures rather than emitting an
+// unowned ErrMsg — see the gate tests in builds_test.go. Its call to
+// NewBuilds is skipped below for that reason, and nothing else may be.
 //
 // There is no runtime state that exercises this today — the risk is a future
 // call site, not a reachable program state — so this checks the source itself
@@ -377,6 +384,9 @@ func TestListViewsAreConstructedOnlyByRootBuild(t *testing.T) {
 				}
 				if strings.Contains(line, "func "+ctor) {
 					continue // the constructor's own definition, not a call site.
+				}
+				if name == "builds.go" && ctor == "NewBuilds(" && strings.Contains(line, "m := NewBuilds(c)") {
+					continue // NewBuildsForPullRequest; see this test's doc.
 				}
 				if name != "root.go" {
 					t.Errorf("%s:%d calls %s outside root.go — a second live instance of this view "+
