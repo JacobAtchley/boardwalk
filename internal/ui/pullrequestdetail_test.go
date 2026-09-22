@@ -763,3 +763,99 @@ func TestPullRequestDetailDoesNotJumpToGatesFromUnderAnotherView(t *testing.T) {
 		t.Error("the gate answer pushed a view over the one the user had opened")
 	}
 }
+
+func TestFilterKeyCyclesTheDiscussionThroughUnresolvedThenResolvedThenAll(t *testing.T) {
+	m := newPRDetail(t, []azdo.Thread{
+		{Status: "fixed", Resolved: true, Comments: []azdo.ThreadComment{{Author: "A", Text: "SETTLED"}}},
+		{Status: "active", Comments: []azdo.ThreadComment{{Author: "B", Text: "OUTSTANDING"}}},
+	})
+	r := drive(t, m, 100, 60)
+
+	r.send(runes("f"))
+	view := r.frame()
+	if strings.Contains(view, "SETTLED") || !strings.Contains(view, "OUTSTANDING") {
+		t.Errorf("one press of f did not leave the unresolved thread alone on screen:\n%s", view)
+	}
+	if !strings.Contains(view, "unresolved only") {
+		t.Errorf("the heading does not name the mode:\n%s", view)
+	}
+	// The tally counts the whole discussion whatever is on screen: it is what
+	// says how much was filtered away.
+	if !strings.Contains(view, "1 resolved, 1 unresolved") {
+		t.Errorf("the heading lost the whole-discussion tally:\n%s", view)
+	}
+
+	r.send(runes("f"))
+	view = r.frame()
+	if !strings.Contains(view, "SETTLED") || strings.Contains(view, "OUTSTANDING") {
+		t.Errorf("the second press of f did not leave the resolved thread alone on screen:\n%s", view)
+	}
+	if !strings.Contains(view, "resolved only") {
+		t.Errorf("the heading does not name the mode:\n%s", view)
+	}
+
+	r.send(runes("f"))
+	view = r.frame()
+	if !strings.Contains(view, "SETTLED") || !strings.Contains(view, "OUTSTANDING") {
+		t.Errorf("the third press of f did not bring the whole discussion back:\n%s", view)
+	}
+}
+
+func TestDiscussionHeadingOffersTheFilterKey(t *testing.T) {
+	m := newPRDetail(t, threadsResolved(1, 1))
+
+	if view := drive(t, m, 100, 60).frame(); !strings.Contains(view, "f filters") {
+		t.Errorf("nothing on screen says f filters the discussion:\n%s", view)
+	}
+}
+
+func TestFilterThatHidesEverySaysWhatItHid(t *testing.T) {
+	// "(no comments)" would be a lie: there is discussion, the filter is
+	// hiding it, and the reader has to be able to tell those apart.
+	m := newPRDetail(t, threadsResolved(2, 0))
+	r := drive(t, m, 100, 60)
+
+	r.send(runes("f"))
+
+	if view := r.frame(); !strings.Contains(view, "no unresolved comments") {
+		t.Errorf("the filtered-empty discussion does not say the filter hid it:\n%s", view)
+	}
+}
+
+func TestReplyAndResolveRefuseWhileOnlyResolvedThreadsAreShown(t *testing.T) {
+	m := newPRDetail(t, []azdo.Thread{
+		threadWithOpener(1, 10, true, "A", "settled"),
+		threadWithOpener(2, 20, false, "Other Dev", "Why the retry cap?"),
+	})
+	r := drive(t, m, 100, 60)
+
+	r.send(runes("f"))
+	r.send(runes("f")) // resolved only: the thread c and R would act on is off screen
+
+	r.send(runes("c"))
+	if m.replyPrompt != nil {
+		t.Error("c opened a prompt on a thread the filter is hiding")
+	}
+	if status, _ := m.Status(); !strings.Contains(status, "no unresolved thread") {
+		t.Errorf("status = %q, want it to explain there is nothing to reply to", status)
+	}
+
+	if cmd := r.send(runes("R")); cmd != nil {
+		t.Error("R resolved a thread the filter is hiding")
+	}
+}
+
+func TestFilterKeySurvivesAFreshDiscussion(t *testing.T) {
+	// Threads landing from a refresh must not quietly undo the filter: the
+	// view would go back to showing everything with the heading still saying
+	// it is filtered.
+	m := newPRDetail(t, threadsResolved(1, 1))
+	r := drive(t, m, 100, 60)
+
+	r.send(runes("f"))
+	r.send(threadsLoadedMsg{PR: 512, Threads: threadsResolved(2, 1)})
+
+	if view := r.frame(); !strings.Contains(view, "unresolved only") {
+		t.Errorf("the refreshed discussion dropped the filter:\n%s", view)
+	}
+}

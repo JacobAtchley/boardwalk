@@ -29,7 +29,7 @@ func newFileView(t *testing.T, threads []azdo.Thread) *FileView {
 	t.Helper()
 	c, pr := prDetailFixture()
 	text, hunks := sampleFile()
-	m := NewFileView(c, pr, "/internal/ui/tail.go", text, hunks, threads)
+	m := NewFileView(c, pr, "/internal/ui/tail.go", text, hunks, threads, filterAll)
 	m.Body(100, 30)
 	return m
 }
@@ -212,7 +212,7 @@ func TestFileViewTitleNamesTheFileAndPullRequest(t *testing.T) {
 // same at both commits. It is still worth opening; it just has nothing marked.
 func TestFileViewOfAFileWithNoHunks(t *testing.T) {
 	c, pr := prDetailFixture()
-	m := NewFileView(c, pr, "/x.go", "one\ntwo\n", nil, nil)
+	m := NewFileView(c, pr, "/x.go", "one\ntwo\n", nil, nil, filterAll)
 
 	view := m.Body(100, 30)
 	if !strings.Contains(view, "one") || !strings.Contains(view, "two") {
@@ -435,5 +435,77 @@ func TestThreadForAnotherFileIsIgnored(t *testing.T) {
 
 	if view := m.Body(100, 30); strings.Contains(view, "not this file") {
 		t.Errorf("another file's new thread landed in this view:\n%s", view)
+	}
+}
+
+func TestFileViewFilterKeyHidesTheSettledComments(t *testing.T) {
+	threads := []azdo.Thread{
+		{ID: 1, Status: "active", File: "/internal/ui/tail.go", Line: 4, RightSide: true,
+			Comments: []azdo.ThreadComment{{ID: 1, Author: "Dev", Text: "OPEN QUESTION"}}},
+		{ID: 2, Status: "fixed", Resolved: true, File: "/internal/ui/tail.go", Line: 4, RightSide: true,
+			Comments: []azdo.ThreadComment{{ID: 1, Author: "Dev", Text: "CLOSED QUESTION"}}},
+	}
+	m := newFileView(t, threads)
+
+	m, _ = pressFile(t, m, runes("f"))
+	view := m.Body(100, 30)
+	if strings.Contains(view, "CLOSED QUESTION") || !strings.Contains(view, "OPEN QUESTION") {
+		t.Errorf("f did not leave the unresolved comment alone beside the code:\n%s", view)
+	}
+
+	m, _ = pressFile(t, m, runes("f"))
+	view = m.Body(100, 30)
+	if !strings.Contains(view, "CLOSED QUESTION") || strings.Contains(view, "OPEN QUESTION") {
+		t.Errorf("the second press of f did not leave the settled comment alone:\n%s", view)
+	}
+
+	m, _ = pressFile(t, m, runes("f"))
+	view = m.Body(100, 30)
+	if !strings.Contains(view, "CLOSED QUESTION") || !strings.Contains(view, "OPEN QUESTION") {
+		t.Errorf("the third press of f did not bring both comments back:\n%s", view)
+	}
+}
+
+// TestFileViewFilterKeepsTheCursorOnItsLine — the cursor indexes the composed
+// file, and the comments under a line are rows between those lines. A filter
+// that changed which line the cursor names would move where a review comment
+// is about to be written.
+func TestFileViewFilterKeepsTheCursorOnItsLine(t *testing.T) {
+	threads := []azdo.Thread{
+		{ID: 1, Status: "fixed", Resolved: true, File: "/internal/ui/tail.go", Line: 4, RightSide: true,
+			Comments: []azdo.ThreadComment{{ID: 1, Author: "Dev", Text: "settled"}}},
+	}
+	m := newFileView(t, threads)
+	m, _ = pressFile(t, m, runes("j"))
+	before := m.cursor
+
+	m, _ = pressFile(t, m, runes("f"))
+
+	if m.cursor != before {
+		t.Errorf("cursor = %d after filtering, want it left on %d", m.cursor, before)
+	}
+}
+
+func TestFileViewKeepsTheFilterTheDiffPaneWasShowing(t *testing.T) {
+	r := newPRDiffWithThreads(t, reviewThreads(),
+		azdo.Change{Path: "/internal/ui/logs.go", ChangeType: "edit"})
+	r.send(fileDiffMsg{PR: 512, Path: "/internal/ui/logs.go",
+		Diff: fileDiff{text: "func tail() {\n}\n", hunks: []*udiff.Hunk{logsHunk()}}})
+
+	r.send(runes("f"))
+	cmd := r.send(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter did not open the file")
+	}
+	push, ok := cmd().(PushMsg)
+	if !ok {
+		t.Fatalf("enter produced %T, want a PushMsg", cmd())
+	}
+	file, ok := push.View.(*FileView)
+	if !ok {
+		t.Fatalf("enter pushed %T, want the file view", push.View)
+	}
+	if file.filter != filterUnresolved {
+		t.Errorf("the file opened showing %v, want the filter the diff pane had", file.filter)
 	}
 }

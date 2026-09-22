@@ -189,6 +189,7 @@ listed newest first.
 | `v` | only pull requests waiting on your review |
 | `d` | cycle drafts hidden → drafts only → all |
 | `P` | publish a draft, or put a published pull request back into draft |
+| `f` | from an opened pull request, cycle its comments all → unresolved → resolved |
 | `^t` | toggle between this repository and the whole project |
 
 `P` asks before it acts: the first press arms the toggle and says what the
@@ -217,6 +218,15 @@ list. The status line carries the policy's own verdict over with it, because
 it is not the build's — a rejected gate over a green run means the policy was
 evaluated against an earlier iteration.
 
+`f` cycles the discussion between all of it, the unresolved threads and the
+resolved ones, which is what a pull request with a lot of feedback on it needs:
+the heading keeps counting the whole discussion, so the filter can never hide
+how much of it is off screen, and a filter that hides everything says so rather
+than reading as a pull request nobody commented on. `c` and `R` act on the
+first unresolved thread *shown*, so neither reaches past the filter to
+something that is not on screen. The filter follows you into the diff and into
+a file opened from it: it is one review, not three.
+
 `A` approves, `W` waits for the author and `X` rejects, each on a second press
 of the same key. They show when the pull request is yours to vote on — named
 directly, or through a group of yours, whether it was resolved at startup or
@@ -232,6 +242,7 @@ own right and leaves the group entry alone, exactly as the web UI does.
 | `D` | from a pull request, open its diff |
 | `^u` / `^d` | scroll the file's diff |
 | `enter` | open the whole file |
+| `f` | cycle the comments all → unresolved → resolved |
 
 The changed files are the list and the selected file's diff is the pane beside
 it, as a unified diff: additions green, deletions red, three lines of context.
@@ -257,8 +268,10 @@ existing thread and resolving one stay on the pull request pane behind `esc`.
 
 Review comments sit under the line they were written against, marked resolved
 or unresolved, and a file with discussion on it carries the count in the list
-beside its name. A comment whose line the diff's three lines of context never
-reach — or one written against the file rather than a line of it — is
+beside its name — the count of what the `f` filter is showing, so the number
+beside a file and the comments under its code always agree. A comment whose
+line the diff's three lines of context never reach — or one written against
+the file rather than a line of it — is
 collected under "elsewhere in this file" rather than dropped. Replying and
 resolving stay on the detail pane behind `esc`; this one is for reading.
 
@@ -285,6 +298,7 @@ any of this. See Setup.
 |---|---|
 | `j` / `k` | move the line cursor |
 | `c` | comment on the line under the cursor |
+| `f` | cycle the comments all → unresolved → resolved |
 | `g` / `G` | top / bottom |
 | `d` | show / hide the change marks |
 

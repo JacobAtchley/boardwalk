@@ -111,6 +111,10 @@ type PullRequestDetail struct {
 	viewport viewport.Model
 	threads  []azdo.Thread
 
+	// filter is which half of the discussion is on screen. A review with a
+	// lot of feedback on it is why: see threadFilter.
+	filter threadFilter
+
 	loaded bool
 	failed bool
 
@@ -263,9 +267,13 @@ func (m *PullRequestDetail) fetchLinked() tea.Cmd {
 // of its own — renderThreads already sorts unresolved threads to the top, so
 // the first one found is the one sitting at the top of the section, the same
 // "first" precedent renderLinked uses for the linked work item w opens.
+//
+// A thread the filter is hiding is not a candidate: the marker naming what c
+// and R will act on is drawn beside a thread, so a key that reached past the
+// filter would act on something with nothing on screen pointing at it.
 func (m *PullRequestDetail) selectedThread() (azdo.Thread, bool) {
 	for _, t := range m.threads {
-		if !t.Resolved {
+		if !t.Resolved && m.filter.keep(t) {
 			return t, true
 		}
 	}
@@ -584,6 +592,10 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 		case key.Matches(msg, keyBottom):
 			m.viewport.GotoBottom()
 			return m, nil
+		case key.Matches(msg, keyThreadFilter):
+			m.filter = m.filter.next()
+			m.invalidate()
+			return m, nil
 		case key.Matches(msg, keyRefresh):
 			m.loaded, m.failed = false, false
 			m.linkedLoaded, m.linkedErr = false, false
@@ -605,7 +617,9 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 			// The discussion goes with it: this view has already fetched it,
 			// and the diff pane shows each comment against the line it was
 			// written on rather than fetching the same threads again.
-			diff := NewPullRequestDiff(m.client, m.pr, m.threads)
+			// The filter goes with it too: the diff pane is where a filtered
+			// discussion is followed up into the code.
+			diff := NewPullRequestDiff(m.client, m.pr, m.threads, m.filter)
 			m.hidden = true
 			return m, func() tea.Msg { return PushMsg{View: diff} }
 		case key.Matches(msg, keyGateBuilds):
@@ -756,9 +770,14 @@ func (m *PullRequestDetail) renderLinked(b *strings.Builder, width int) {
 // still waiting on somebody, and burying them under settled ones would defeat
 // the point of opening the view.
 func (m *PullRequestDetail) renderThreads(b *strings.Builder, width int) {
+	// The tally counts the whole discussion however it is filtered: it is
+	// what says how much of it is off screen.
 	counts := azdo.Summarize(m.threads)
-	fmt.Fprintf(b, "\n%s\n", labelStyle.Render(
-		fmt.Sprintf("discussion — %d resolved, %d unresolved", counts.Resolved, counts.Unresolved)))
+	head := fmt.Sprintf("discussion — %d resolved, %d unresolved", counts.Resolved, counts.Unresolved)
+	if m.filter != filterAll {
+		head += " · " + m.filter.label()
+	}
+	fmt.Fprintf(b, "\n%s%s\n", labelStyle.Render(head), chromeStyle.Render("  f filters"))
 
 	switch {
 	case m.failed:
@@ -774,13 +793,21 @@ func (m *PullRequestDetail) renderThreads(b *strings.Builder, width int) {
 
 	selected, hasSelected := m.selectedThread()
 
+	shown := 0
 	for _, pass := range []bool{false, true} {
 		for _, t := range m.threads {
-			if t.Resolved != pass {
+			if t.Resolved != pass || !m.filter.keep(t) {
 				continue
 			}
+			shown++
 			m.renderThread(b, t, hasSelected && t.ID == selected.ID, width)
 		}
+	}
+	if shown == 0 {
+		// Not "(no comments)": there is discussion here, the filter is
+		// hiding it, and a reader who cannot tell those apart will think the
+		// feedback they came for has gone.
+		fmt.Fprintf(b, "%s\n", chromeStyle.Render(fmt.Sprintf("(no %s comments)", m.filter.noun())))
 	}
 }
 
@@ -842,7 +869,7 @@ func (m *PullRequestDetail) Keys() help.KeyMap {
 	// on a published one — and absent altogether on a merged or abandoned one,
 	// which this view reaches through a work item's or a build's link. Offering
 	// a key that would only be refused is worse than not offering it.
-	full := []key.Binding{keyDiff, keyGateBuilds, keyLinkedItem, keyReply, keyResolve}
+	full := []key.Binding{keyDiff, keyGateBuilds, keyLinkedItem, keyReply, keyResolve, keyThreadFilter}
 	if draftable(m.pr) {
 		full = append(full, draftBinding(m.pr.IsDraft))
 	}
