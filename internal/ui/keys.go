@@ -48,6 +48,13 @@ var (
 	keyBottom      = key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom"))
 	keyReply       = key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "reply"))
 	keyResolve     = key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "resolve"))
+	// keyThreadFilter cycles the discussion between all threads, the
+	// unresolved ones and the resolved ones. It is lower case because it is a
+	// way of looking rather than an act — the same weight as keyStamps and
+	// keyFileDiff — and "f" is free on all three views that show a thread.
+	// It is not "/": that is the fuzzy filter over a list's rows everywhere
+	// else in the program, and the discussion is not a list of rows.
+	keyThreadFilter = key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "comment filter"))
 	// keyComment shares its letter with keyReply on purpose: answering a
 	// thread and commenting on a work item are the same action — add to the
 	// discussion — on two different views, so the same mnemonic serves both

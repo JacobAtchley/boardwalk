@@ -205,6 +205,12 @@ type PullRequestDiff struct {
 	// the comments are, and replying to one is still the detail view's job.
 	threads []azdo.Thread
 
+	// filter is which half of that discussion is drawn, both under the code
+	// and in the rows' counts. It arrives from the detail view rather than
+	// starting fresh: reading the code is where a filtered discussion is
+	// followed up, so landing here unfiltered would undo it by hand.
+	filter threadFilter
+
 	// generation counts refreshes. Bumped before Init re-fetches the file
 	// list, it is what lets fileDiffMsg tell a fetch issued before the refresh
 	// apart from one issued after — see fileDiffMsg's doc.
@@ -218,7 +224,7 @@ type PullRequestDiff struct {
 
 // NewPullRequestDiff builds the view. It fetches nothing itself — Init does
 // that — so it can be constructed without a client that can reach the network.
-func NewPullRequestDiff(c *azdo.Client, pr azdo.PullRequest, threads []azdo.Thread) *PullRequestDiff {
+func NewPullRequestDiff(c *azdo.Client, pr azdo.PullRequest, threads []azdo.Thread, filter threadFilter) *PullRequestDiff {
 	m := &PullRequestDiff{
 		client:  c,
 		pr:      pr,
@@ -226,6 +232,7 @@ func NewPullRequestDiff(c *azdo.Client, pr azdo.PullRequest, threads []azdo.Thre
 		diffs:   map[string]fileDiff{},
 		loading: map[string]bool{},
 		threads: threads,
+		filter:  filter,
 		work:    newWork(),
 	}
 	m.browser.ListShare = diffListShare
@@ -266,10 +273,13 @@ func (m *PullRequestDiff) applyRows() {
 	rows := make([]Row, 0, len(m.changes))
 	for _, ch := range m.changes {
 		rows = append(rows, changeRow{
-			Change:  ch,
-			url:     m.client.PullRequestFileURL(m.pr.Repo, m.pr.ID, ch.Path),
-			read:    m.diffs,
-			threads: len(azdo.ThreadsForFile(m.threads, ch.Path)),
+			Change: ch,
+			url:    m.client.PullRequestFileURL(m.pr.Repo, m.pr.ID, ch.Path),
+			read:   m.diffs,
+			// Counted after filtering, so the badge and the comments the pane
+			// draws under the code cannot disagree about how much is left to
+			// read on a file.
+			threads: len(m.filter.apply(azdo.ThreadsForFile(m.threads, ch.Path))),
 		})
 	}
 	m.browser.SetRows(rows)
@@ -499,8 +509,19 @@ func (m *PullRequestDiff) Update(msg tea.Msg) (View, tea.Cmd) {
 				m.status, m.failed = d.note, false
 				return m, nil
 			}
-			file := NewFileView(m.client, m.pr, path, d.text, d.hunks, m.threads)
+			file := NewFileView(m.client, m.pr, path, d.text, d.hunks, m.threads, m.filter)
 			return m, func() tea.Msg { return PushMsg{View: file} }
+		}
+
+		if key.Matches(msg, keyThreadFilter) {
+			m.filter = m.filter.next()
+			// The rows carry the counts and the pane beside them carries the
+			// comments, so both are rebuilt here rather than left to catch up
+			// on the next file list or the next cursor move.
+			m.applyRows()
+			m.browser.RefreshDetail()
+			m.status, m.failed = "comments: "+m.filter.label(), false
+			return m, nil
 		}
 
 		if key.Matches(msg, keyRefresh) {
@@ -547,7 +568,7 @@ func (m *PullRequestDiff) renderDetail(row Row, width int) string {
 		// both commits: a mode change, or a merge that reverted it.
 		fmt.Fprintf(&b, "%s\n", chromeStyle.Render("(no textual changes)"))
 	default:
-		renderHunks(&b, d.hunks, azdo.ThreadsForFile(m.threads, r.Path), width)
+		renderHunks(&b, d.hunks, m.filter.apply(azdo.ThreadsForFile(m.threads, r.Path)), width)
 	}
 	return b.String()
 }
@@ -775,7 +796,11 @@ func (m *PullRequestDiff) Title() string {
 // here is reading. Filter and refresh sit in the panel behind "?" rather than
 // on the footer, the same as every other list view now — see listKeys's own
 // doc for why.
-func (m *PullRequestDiff) Keys() help.KeyMap { return listKeys(nil) }
+// Keys puts the comment filter in the panel rather than on the short line:
+// that line is already at the width TestEveryViewsShortHelpSurvivesOrdinaryWidths
+// guards, and the discussion heading in the pane says "f filters" where the
+// comments themselves are.
+func (m *PullRequestDiff) Keys() help.KeyMap { return listKeys(nil, keyThreadFilter) }
 
 // Status is the transient status line, or the fuzzy filter prompt while one is
 // open.

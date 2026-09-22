@@ -21,7 +21,7 @@ func newPRDiff(t *testing.T, changes ...azdo.Change) *runtimeView[*PullRequestDi
 	c, pr := prDetailFixture()
 	pr.SourceCommit, pr.TargetCommit = "source-sha", "target-sha"
 
-	r := drive(t, NewPullRequestDiff(c, pr, nil), diffWidth, diffHeight)
+	r := drive(t, NewPullRequestDiff(c, pr, nil, filterAll), diffWidth, diffHeight)
 	r.send(prChangesMsg{PR: pr.ID, Changes: changes})
 	return r
 }
@@ -387,7 +387,7 @@ func TestPullRequestDiffSaysWhenAFilesTextIsUnchanged(t *testing.T) {
 
 func TestPullRequestDiffOnAPullRequestWithNoComputedMerge(t *testing.T) {
 	c, pr := prDetailFixture() // no SourceCommit or TargetCommit
-	r := drive(t, NewPullRequestDiff(c, pr, nil), diffWidth, diffHeight)
+	r := drive(t, NewPullRequestDiff(c, pr, nil, filterAll), diffWidth, diffHeight)
 	r.send(prChangesMsg{PR: pr.ID})
 
 	if !strings.Contains(r.frame(), "has not computed") {
@@ -406,7 +406,7 @@ func TestPullRequestDiffOnAPullRequestChangingNothing(t *testing.T) {
 func TestPullRequestDiffReportsAFailedListing(t *testing.T) {
 	c, pr := prDetailFixture()
 	pr.SourceCommit, pr.TargetCommit = "source-sha", "target-sha"
-	r := drive(t, NewPullRequestDiff(c, pr, nil), diffWidth, diffHeight)
+	r := drive(t, NewPullRequestDiff(c, pr, nil, filterAll), diffWidth, diffHeight)
 	r.send(prChangesMsg{PR: pr.ID, Err: errTest})
 
 	if status, failed := r.view.Status(); !failed || !strings.Contains(status, errTest.Error()) {

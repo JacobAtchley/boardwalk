@@ -30,7 +30,7 @@ func newPRDiffWithThreads(t *testing.T, threads []azdo.Thread, changes ...azdo.C
 	c, pr := prDetailFixture()
 	pr.SourceCommit, pr.TargetCommit = "source-sha", "target-sha"
 
-	r := drive(t, NewPullRequestDiff(c, pr, threads), diffWidth, diffHeight)
+	r := drive(t, NewPullRequestDiff(c, pr, threads, filterAll), diffWidth, diffHeight)
 	r.send(prChangesMsg{PR: pr.ID, Changes: changes})
 	return r
 }
@@ -193,5 +193,86 @@ func TestResolvedThreadIsMarkedAsSuch(t *testing.T) {
 	}
 	if !strings.Contains(view, "resolved") {
 		t.Errorf("the settled thread is not marked resolved:\n%s", view)
+	}
+}
+
+func TestDiffPaneFilterKeyHidesTheSettledComments(t *testing.T) {
+	threads := []azdo.Thread{
+		{ID: 1, Status: "active", File: "/a.go", Line: 10, RightSide: true,
+			Comments: []azdo.ThreadComment{{ID: 1, Author: "Dev", Text: "OPEN QUESTION"}}},
+		{ID: 2, Status: "fixed", Resolved: true, File: "/a.go", Line: 10, RightSide: true,
+			Comments: []azdo.ThreadComment{{ID: 1, Author: "Dev", Text: "CLOSED QUESTION"}}},
+	}
+	r := newPRDiffWithThreads(t, threads, azdo.Change{Path: "/a.go", ChangeType: "edit"})
+	r.send(fileDiffMsg{PR: 512, Path: "/a.go", Diff: fileDiff{
+		hunks: []*udiff.Hunk{hunk(10, 10, line(udiff.Equal, "x := 1\n"))}}})
+
+	r.send(runes("f"))
+	view := r.frame()
+	if strings.Contains(view, "CLOSED QUESTION") || !strings.Contains(view, "OPEN QUESTION") {
+		t.Errorf("f did not leave the unresolved comment alone under the code:\n%s", view)
+	}
+
+	r.send(runes("f"))
+	view = r.frame()
+	if !strings.Contains(view, "CLOSED QUESTION") || strings.Contains(view, "OPEN QUESTION") {
+		t.Errorf("the second press of f did not leave the settled comment alone:\n%s", view)
+	}
+}
+
+func TestChangedFileRowCountsOnlyWhatTheFilterShows(t *testing.T) {
+	// The badge and the comments under the code have to agree: a row saying
+	// two while the pane shows one is the row lying about which files still
+	// need reading.
+	threads := []azdo.Thread{
+		{ID: 1, Status: "active", File: "/a.go", Line: 10, RightSide: true,
+			Comments: []azdo.ThreadComment{{ID: 1, Author: "Dev", Text: "open"}}},
+		{ID: 2, Status: "fixed", Resolved: true, File: "/a.go", Line: 11, RightSide: true,
+			Comments: []azdo.ThreadComment{{ID: 1, Author: "Dev", Text: "closed"}}},
+	}
+	r := newPRDiffWithThreads(t, threads, azdo.Change{Path: "/a.go", ChangeType: "edit"})
+
+	rowOf := func() string {
+		for _, l := range strings.Split(r.frame(), "\n") {
+			if strings.Contains(l, "a.go") {
+				return l
+			}
+		}
+		t.Fatalf("no row for a.go:\n%s", r.frame())
+		return ""
+	}
+
+	if got := rowOf(); !strings.Contains(got, "💬2") {
+		t.Errorf("row = %q, want it counting both threads unfiltered", got)
+	}
+
+	r.send(runes("f"))
+	if got := rowOf(); !strings.Contains(got, "💬1") {
+		t.Errorf("row = %q, want it counting only the unresolved thread", got)
+	}
+}
+
+func TestDiffPaneKeepsTheFilterTheDetailViewWasShowing(t *testing.T) {
+	// Drilling into the code from a filtered discussion and finding every
+	// settled comment back under it would undo the filtering by hand.
+	m := newPRDetail(t, threadsResolved(1, 1))
+	m.pr.SourceCommit, m.pr.TargetCommit = "source-sha", "target-sha"
+	r := drive(t, m, 100, 60)
+
+	r.send(runes("f"))
+	cmd := r.send(runes("D"))
+	if cmd == nil {
+		t.Fatal("D did not open the diff pane")
+	}
+	push, ok := cmd().(PushMsg)
+	if !ok {
+		t.Fatalf("D produced %T, want a PushMsg", cmd())
+	}
+	diff, ok := push.View.(*PullRequestDiff)
+	if !ok {
+		t.Fatalf("D pushed %T, want the diff pane", push.View)
+	}
+	if diff.filter != filterUnresolved {
+		t.Errorf("the diff pane opened showing %v, want the filter the detail view had", diff.filter)
 	}
 }

@@ -41,6 +41,11 @@ type FileView struct {
 
 	threads []azdo.Thread
 
+	// filter is which half of the discussion is drawn beside the code. It
+	// arrives from the diff pane rather than starting fresh, for the reason
+	// that field's own comment gives.
+	filter threadFilter
+
 	// showDiff is whether the change is marked at all. With it off this is
 	// simply the file, which is what reading the code rather than the change
 	// wants.
@@ -101,7 +106,7 @@ func createThreadCmd(c *azdo.Client, pr azdo.PullRequest, path string, line int,
 // the file to diff them, so by the time a row can be opened the text is
 // already in hand.
 func NewFileView(c *azdo.Client, pr azdo.PullRequest, path, text string,
-	hunks []*udiff.Hunk, threads []azdo.Thread) *FileView {
+	hunks []*udiff.Hunk, threads []azdo.Thread, filter threadFilter) *FileView {
 	return &FileView{
 		client:      c,
 		pr:          pr,
@@ -109,6 +114,7 @@ func NewFileView(c *azdo.Client, pr azdo.PullRequest, path, text string,
 		lines:       composeFile(text, hunks),
 		highlighted: highlightLines(text, path),
 		threads:     azdo.ThreadsForFile(threads, path),
+		filter:      filter,
 		showDiff:    true,
 		viewport:    viewport.New(0, 0),
 	}
@@ -171,6 +177,14 @@ func (m *FileView) Update(msg tea.Msg) (View, tea.Cmd) {
 			// The cursor indexes the composed file, which does not change —
 			// only which of its lines are drawn. Landing on a hidden row is
 			// handled by the render, which skips it.
+			m.invalidate()
+			return m, nil
+		case key.Matches(msg, keyThreadFilter):
+			// The cursor indexes the composed file, which the filter does not
+			// touch — only the comment rows drawn between its lines — so it
+			// stays on the line it was naming.
+			m.filter = m.filter.next()
+			m.status, m.failed = "comments: "+m.filter.label(), false
 			m.invalidate()
 			return m, nil
 		case key.Matches(msg, keyLineDown):
@@ -305,7 +319,7 @@ func (m *FileView) threadsAt(l fileLine) []azdo.Thread {
 	}
 	var out []azdo.Thread
 	for _, t := range m.threads {
-		if t.RightSide && t.Line == l.New {
+		if t.RightSide && t.Line == l.New && m.filter.keep(t) {
 			out = append(out, t)
 		}
 	}
@@ -366,7 +380,7 @@ func (m *FileView) Title() string {
 }
 
 func (m *FileView) Keys() help.KeyMap {
-	own := []key.Binding{keyComment, keyFileDiff, keyLineUp, keyLineDown, keyTop, keyBottom}
+	own := []key.Binding{keyComment, keyFileDiff, keyThreadFilter, keyLineUp, keyLineDown, keyTop, keyBottom}
 	return keyMap{
 		short:  []key.Binding{keyComment, keyFileDiff, keyBack, keyHelp},
 		groups: [][]key.Binding{own, {keyCopyID, keyOpen}, navBindings()},
