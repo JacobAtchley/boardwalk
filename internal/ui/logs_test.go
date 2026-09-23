@@ -484,3 +484,135 @@ func TestLogsOffersTheJumpKey(t *testing.T) {
 		t.Errorf("help = %q, want the jump key named", got)
 	}
 }
+
+func TestLogsErrorsOnlyLeavesOrdinaryOutputOut(t *testing.T) {
+	m := loadedLogs(t, []string{"compiling", "##[error]boom", "linking"})
+
+	m = pressLog(t, m, "e")
+
+	view := m.Body(120, 20)
+	if !strings.Contains(view, "boom") {
+		t.Errorf("the error is missing:\n%s", view)
+	}
+	if strings.Contains(view, "compiling") || strings.Contains(view, "linking") {
+		t.Errorf("ordinary output survived the filter:\n%s", view)
+	}
+}
+
+func TestLogsErrorsOnlyKeepsTheTaskThatOwnsTheError(t *testing.T) {
+	m := newLogs(t, azdo.StatusFailed)
+	updated, _ := m.Update(logChunksMsg{Status: azdo.StatusFailed, Chunks: []azdo.LogChunk{
+		{Task: "Restore", LogID: 6, Lines: []string{"restoring"}},
+		{Task: "Test", LogID: 7, Lines: []string{"##[error]boom"}},
+	}})
+	m = updated.(*Logs)
+	m.Body(120, 20)
+
+	m = pressLog(t, m, "e")
+
+	view := m.Body(120, 20)
+	if !strings.Contains(view, "── Test ──") {
+		t.Errorf("the failing task's heading is missing, so the error belongs to nothing:\n%s", view)
+	}
+	if strings.Contains(view, "── Restore ──") {
+		t.Errorf("a task with no errors kept its heading:\n%s", view)
+	}
+}
+
+func TestLogsErrorsOnlyGivesTheLogBackOnASecondPress(t *testing.T) {
+	m := loadedLogs(t, []string{"compiling", "##[error]boom"})
+
+	m = pressLog(t, m, "e")
+	m = pressLog(t, m, "e")
+
+	if view := m.Body(120, 20); !strings.Contains(view, "compiling") {
+		t.Errorf("the log did not come back:\n%s", view)
+	}
+}
+
+func TestLogsErrorsOnlyKeepsFilteringWhatArrivesWhileTailing(t *testing.T) {
+	m := newLogs(t, azdo.StatusRunning)
+	updated, _ := m.Update(logChunksMsg{Status: azdo.StatusRunning,
+		Chunks: []azdo.LogChunk{{Task: "Test", LogID: 7, Lines: []string{"##[error]first"}}}})
+	m = updated.(*Logs)
+	m.Body(120, 20)
+	m = pressLog(t, m, "e")
+
+	updated, _ = m.Update(logChunksMsg{Status: azdo.StatusRunning,
+		Chunks: []azdo.LogChunk{{Task: "Test", LogID: 7, Lines: []string{"still going", "##[error]second"}}}})
+	m = updated.(*Logs)
+
+	view := m.Body(120, 20)
+	if !strings.Contains(view, "second") {
+		t.Errorf("an error that arrived while filtered is missing:\n%s", view)
+	}
+	if strings.Contains(view, "still going") {
+		t.Errorf("ordinary output that arrived while filtered got through:\n%s", view)
+	}
+}
+
+func TestLogsErrorsOnlyDeclinesWhenThereAreNoErrors(t *testing.T) {
+	m := loadedLogs(t, []string{"compiling", "linking"})
+
+	m = pressLog(t, m, "e")
+
+	status, _ := m.Status()
+	if !strings.Contains(status, "no error") {
+		t.Errorf("status = %q, want it to say there is nothing to filter to", status)
+	}
+	if view := m.Body(120, 20); !strings.Contains(view, "compiling") {
+		t.Errorf("the log was emptied out instead:\n%s", view)
+	}
+}
+
+func TestLogsJumpStillLandsOnErrorsWhileFiltered(t *testing.T) {
+	// Enough errors that the filtered buffer is still taller than the pane:
+	// a viewport with nowhere to scroll would pass this for the wrong reason.
+	var at []int
+	for i := 0; i < 30; i++ {
+		at = append(at, i*4)
+	}
+	m := loadedLogs(t, longLog(at...))
+
+	m = pressLog(t, m, "e")
+	m = pressLog(t, m, "n")
+
+	// Filtered, the buffer is the task rule's two rows and then the errors,
+	// so the first error is the third row.
+	if got := m.viewport.YOffset; got != 2 {
+		t.Errorf("offset = %d, want 2 — the first error in the filtered buffer", got)
+	}
+	m = pressLog(t, m, "n")
+	if got := m.viewport.YOffset; got != 3 {
+		t.Errorf("offset = %d, want 3 — the next error is the next row", got)
+	}
+}
+
+func TestLogsOffersTheErrorFilterKey(t *testing.T) {
+	m := loadedLogs(t, longLog(40))
+	if got := helpLine(m.Keys()); !strings.Contains(got, "e errors only") {
+		t.Errorf("help = %q, want the filter key named", got)
+	}
+}
+
+func TestLogsDoesNotRepeatLinesAfterTheFilterIsTurnedOff(t *testing.T) {
+	m := newLogs(t, azdo.StatusRunning)
+	updated, _ := m.Update(logChunksMsg{Status: azdo.StatusRunning,
+		Chunks: []azdo.LogChunk{{Task: "Test", LogID: 7, Lines: []string{"##[error]boom"}}}})
+	m = updated.(*Logs)
+	m.Body(120, 20)
+
+	m = pressLog(t, m, "e")
+	updated, _ = m.Update(logChunksMsg{Status: azdo.StatusRunning,
+		Chunks: []azdo.LogChunk{{Task: "Test", LogID: 7, Lines: []string{"while filtered"}}}})
+	m = updated.(*Logs)
+	m = pressLog(t, m, "e")
+	updated, _ = m.Update(logChunksMsg{Status: azdo.StatusRunning,
+		Chunks: []azdo.LogChunk{{Task: "Test", LogID: 7, Lines: []string{"after"}}}})
+	m = updated.(*Logs)
+
+	view := m.Body(120, 20)
+	if got := strings.Count(view, "while filtered"); got != 1 {
+		t.Errorf("the line appears %d times, want once:\n%s", got, view)
+	}
+}

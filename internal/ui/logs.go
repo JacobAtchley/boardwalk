@@ -58,9 +58,17 @@ type Logs struct {
 	// for why it starts off.
 	showStamps bool
 
+	// showErrors is whether the pane is cut down to its error lines. See
+	// keyErrorsOnly.
+	showErrors bool
+
 	// rowCount is how many rows the buffer holds, which is what makes the next
 	// line's row known without counting the buffer again.
 	rowCount int
+
+	// pending is how many lines have been recorded but not yet written to the
+	// buffer — the lines one append is about to render.
+	pending int
 
 	// errRows is the buffer row each error line landed on, in order, which is
 	// what keyNextError jumps between. Rows rather than indexes into lines:
@@ -202,6 +210,9 @@ func (m *Logs) Update(msg tea.Msg) (View, tea.Cmd) {
 		case key.Matches(msg, keyBottom):
 			m.viewport.GotoBottom()
 			return m, nil
+		case key.Matches(msg, keyErrorsOnly):
+			m.toggleErrors()
+			return m, nil
 		case key.Matches(msg, keyNextError):
 			m.jumpToNextError()
 			return m, nil
@@ -246,14 +257,26 @@ func (m *Logs) append(chunks []azdo.LogChunk) {
 	atBottom := m.viewport.AtBottom()
 	for _, c := range chunks {
 		if c.Task != m.lastTask {
-			m.add(taskRule(c.Task))
+			m.record(taskRule(c.Task))
 			m.lastTask = c.Task
 		}
 		for _, line := range c.Lines {
-			m.add(parseLogLine(line))
+			m.record(parseLogLine(line))
 		}
 	}
 
+	// Filtered, an appended line cannot be rendered as it arrives: whether a
+	// task heading belongs on screen depends on the lines that come after it,
+	// which have not arrived yet. The whole buffer is written again instead —
+	// only while the filter is on, and only for as long as the build tails.
+	if m.showErrors {
+		m.rebuild()
+		return
+	}
+	for _, l := range m.lines[len(m.lines)-m.pending:] {
+		m.write(l)
+	}
+	m.pending = 0
 	m.viewport.SetContent(m.text.String())
 	// Following the tail is only useful if the reader has not scrolled away.
 	if atBottom {
@@ -261,10 +284,12 @@ func (m *Logs) append(chunks []azdo.LogChunk) {
 	}
 }
 
-// add records a line and renders it onto the end of the buffer.
-func (m *Logs) add(l logLine) {
+// record keeps a line without rendering it: whether it is rendered, and
+// whether the heading above it is, is append's decision once the whole chunk
+// is in.
+func (m *Logs) record(l logLine) {
 	m.lines = append(m.lines, l)
-	m.write(l)
+	m.pending++
 }
 
 // write renders one line onto the end of the buffer and notes where it landed,
@@ -277,6 +302,69 @@ func (m *Logs) write(l logLine) {
 	}
 	m.rowCount += logRows(l)
 	writeLogLine(&m.text, l, m.showStamps)
+}
+
+// toggleErrors cuts the pane down to its errors, or gives the log back.
+//
+// A log with no errors is left alone rather than emptied: a blank pane is not
+// an answer, and the same sentence the jump key uses says why there was
+// nothing to show.
+func (m *Logs) toggleErrors() {
+	if !m.showErrors && !m.hasErrors() {
+		m.status, m.failed = "no error lines in this log", false
+		return
+	}
+
+	m.showErrors = !m.showErrors
+	m.rebuild()
+	// The offset it was at belonged to the other buffer: a row number means
+	// nothing once most of the rows are gone, or once they are all back.
+	m.viewport.GotoTop()
+	m.status, m.failed = "", false
+}
+
+func (m *Logs) hasErrors() bool {
+	for _, l := range m.lines {
+		if l.Level == levelError {
+			return true
+		}
+	}
+	return false
+}
+
+// visibleLines is what the buffer is rendered from: every line, or — filtered
+// — the errors and the task headings that own them. A heading whose task
+// reported nothing is left out too; keeping it would say a task failed when
+// all it did was run.
+func (m *Logs) visibleLines() []logLine {
+	if !m.showErrors {
+		return m.lines
+	}
+
+	out := make([]logLine, 0, 16)
+	for i, l := range m.lines {
+		switch {
+		case l.Level == levelError:
+			out = append(out, l)
+		case l.Level == levelTaskRule && taskHasError(m.lines[i+1:]):
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// taskHasError reports whether the lines after a task heading, up to the next
+// heading, include an error.
+func taskHasError(rest []logLine) bool {
+	for _, l := range rest {
+		if l.Level == levelTaskRule {
+			return false
+		}
+		if l.Level == levelError {
+			return true
+		}
+	}
+	return false
 }
 
 // jumpToNextError scrolls to the first error below the top of the pane,
@@ -319,8 +407,11 @@ func (m *Logs) rebuild() {
 	atBottom := m.viewport.AtBottom()
 
 	m.text.Reset()
-	m.errRows, m.rowCount = nil, 0
-	for _, l := range m.lines {
+	// A rebuild has written every recorded line, so nothing is left pending:
+	// leaving a count behind here had the next append write the tail of the
+	// buffer a second time.
+	m.errRows, m.rowCount, m.pending = nil, 0, 0
+	for _, l := range m.visibleLines() {
 		m.write(l)
 	}
 	m.viewport.SetContent(m.text.String())
@@ -430,13 +521,22 @@ func (m *Logs) Title() string {
 // caught here because this one never overflowed. Copy-id and open are still
 // one press of "?" away in the panel's second column.
 func (m *Logs) Keys() help.KeyMap {
-	own := []key.Binding{keyTop, keyBottom, keyNextError, keyStamps}
+	own := []key.Binding{keyTop, keyBottom, keyStamps}
 	if m.build.Status.Done() {
 		own = append(own, keyRefresh)
 	}
+	// The footer carries the two keys that answer "why did it fail", and
+	// refresh once there is any point in it. Naming the scroll and timestamp
+	// keys there too pushed esc and ? off the end at eighty columns, which is
+	// the defect TestEveryViewsShortHelpSurvivesOrdinaryWidths exists to
+	// catch; they are one press of "?" away.
+	short := []key.Binding{keyNextError, keyErrorsOnly}
+	if m.build.Status.Done() {
+		short = append(short, keyRefresh)
+	}
 	return keyMap{
-		short:  append(append([]key.Binding{}, own...), keyBack, keyHelp),
-		groups: [][]key.Binding{own, {keyCopyID, keyOpen}, navBindings()},
+		short:  append(short, keyBack, keyHelp),
+		groups: [][]key.Binding{append([]key.Binding{keyNextError, keyErrorsOnly}, own...), {keyCopyID, keyOpen}, navBindings()},
 	}
 }
 

@@ -83,6 +83,12 @@ var (
 	// claim on the letter and it belongs to a view this one cannot reach.
 	keyStamps = key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "timestamps"))
 
+	// keyErrorsOnly cuts the log pane down to its error lines and the task
+	// headings that own them. It is lower case for the reason keyThreadFilter
+	// gives — it is a way of looking rather than an act — and "e" is claimed
+	// by nothing else in the program.
+	keyErrorsOnly = key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "errors only"))
+
 	// keyNextError jumps the log pane to the next "##[error]" line, wrapping
 	// at the end. There is deliberately no key for the previous one: the
 	// obvious pair — N and p — both already mean something on the build list
