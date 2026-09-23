@@ -363,10 +363,16 @@ func (c *Client) send(req *http.Request) (*http.Response, error) {
 	}
 
 	if rejected(resp) {
+		// Read why before the retry discards it. A refresh that then fails
+		// leaves this as the only account of what the server actually said,
+		// and a 401 the token had aged out of reads nothing like one it was
+		// never scoped for.
+		refused := fmt.Sprintf("%s: %s", resp.Status, apiError(resp.Body))
 		resp.Body.Close()
+
 		fresh, err := c.refresh(stale)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%s: %w", refused, err)
 		}
 		retry, err := replayable(req)
 		if err != nil {

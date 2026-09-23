@@ -23,8 +23,12 @@ func testClient(t *testing.T, h http.HandlerFunc) *Client {
 		Project: "Platform",
 		Me:      "dev@acme.test",
 		token:   "test-token",
-		http:    &http.Client{Timeout: 5 * time.Second},
-		baseURL: srv.URL,
+		// Without this a test whose server answers 401 would shell out to
+		// the real az CLI, which passes on a developer's machine and fails
+		// on a build agent that has never logged in.
+		newToken: func() (string, error) { return "refreshed-token", nil },
+		http:     &http.Client{Timeout: 5 * time.Second},
+		baseURL:  srv.URL,
 	}
 }
 
@@ -281,6 +285,12 @@ func TestAFailedRefreshReportsTheLoginAndStopsTrying(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "az login") {
 		t.Errorf("error = %q, want it to name az login", err)
+	}
+	// The request's own failure is half the story: a 401 and a 403 the token
+	// could never have satisfied both end up here, and only the server's
+	// message tells them apart.
+	if !strings.Contains(err.Error(), "TF400813") {
+		t.Errorf("error = %q, want the rejected request's message in it too", err)
 	}
 	if calls != 1 {
 		t.Errorf("server saw %d requests, want the one that failed and no retry", calls)
