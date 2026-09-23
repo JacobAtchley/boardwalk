@@ -58,6 +58,16 @@ type Logs struct {
 	// for why it starts off.
 	showStamps bool
 
+	// rowCount is how many rows the buffer holds, which is what makes the next
+	// line's row known without counting the buffer again.
+	rowCount int
+
+	// errRows is the buffer row each error line landed on, in order, which is
+	// what keyNextError jumps between. Rows rather than indexes into lines:
+	// see logRows for why the two are not the same number. It is rebuilt
+	// wherever the buffer is.
+	errRows []int
+
 	// fetching is a single-flight guard. fetch's closure mutates m.cursor in
 	// place, and bubbletea runs each returned Cmd in its own goroutine — two
 	// fetches in flight at once would be a concurrent map write, which is a
@@ -192,6 +202,9 @@ func (m *Logs) Update(msg tea.Msg) (View, tea.Cmd) {
 		case key.Matches(msg, keyBottom):
 			m.viewport.GotoBottom()
 			return m, nil
+		case key.Matches(msg, keyNextError):
+			m.jumpToNextError()
+			return m, nil
 		case key.Matches(msg, keyStamps):
 			m.showStamps = !m.showStamps
 			m.rebuild()
@@ -251,7 +264,40 @@ func (m *Logs) append(chunks []azdo.LogChunk) {
 // add records a line and renders it onto the end of the buffer.
 func (m *Logs) add(l logLine) {
 	m.lines = append(m.lines, l)
+	m.write(l)
+}
+
+// write renders one line onto the end of the buffer and notes where it landed,
+// so that a jump has somewhere to jump to. Both the append path and the
+// rebuild path go through here: an index maintained in only one of them would
+// be right until the first timestamp toggle.
+func (m *Logs) write(l logLine) {
+	if l.Level == levelError {
+		m.errRows = append(m.errRows, m.rowCount)
+	}
+	m.rowCount += logRows(l)
 	writeLogLine(&m.text, l, m.showStamps)
+}
+
+// jumpToNextError scrolls to the first error below the top of the pane,
+// wrapping round to the first once past the last one. The error is put at the
+// top of the pane rather than in the middle: what explains a failure is the
+// output under it.
+func (m *Logs) jumpToNextError() {
+	if len(m.errRows) == 0 {
+		m.status, m.failed = "no error lines in this log", false
+		return
+	}
+
+	next := m.errRows[0]
+	for _, row := range m.errRows {
+		if row > m.viewport.YOffset {
+			next = row
+			break
+		}
+	}
+	m.viewport.SetYOffset(next)
+	m.status, m.failed = "", false
 }
 
 // taskRule is the heading written between one task's output and the next. It
@@ -273,8 +319,9 @@ func (m *Logs) rebuild() {
 	atBottom := m.viewport.AtBottom()
 
 	m.text.Reset()
+	m.errRows, m.rowCount = nil, 0
 	for _, l := range m.lines {
-		writeLogLine(&m.text, l, m.showStamps)
+		m.write(l)
 	}
 	m.viewport.SetContent(m.text.String())
 
@@ -383,7 +430,7 @@ func (m *Logs) Title() string {
 // caught here because this one never overflowed. Copy-id and open are still
 // one press of "?" away in the panel's second column.
 func (m *Logs) Keys() help.KeyMap {
-	own := []key.Binding{keyTop, keyBottom, keyStamps}
+	own := []key.Binding{keyTop, keyBottom, keyNextError, keyStamps}
 	if m.build.Status.Done() {
 		own = append(own, keyRefresh)
 	}

@@ -150,6 +150,22 @@ func logStyle(level logLevel) lipgloss.Style {
 	}
 }
 
+// logRows is how many rows a line takes in the buffer, which is not always
+// one: an endgroup marker writes nothing at all, and a task rule writes the
+// blank line above itself. The pane indexes its errors by row, so this and
+// writeLogLine have to agree — TestLogRowsAgreesWithWhatIsWritten is what
+// keeps them honest.
+func logRows(l logLine) int {
+	switch l.Level {
+	case levelEndGroup:
+		return 0
+	case levelTaskRule:
+		return 2
+	default:
+		return 1
+	}
+}
+
 // writeLogLine renders one line into the pane's buffer, newline included.
 //
 // showStamps is off by default in the pane: the prefix is the same 28 columns

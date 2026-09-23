@@ -390,3 +390,97 @@ func TestLogsDigestFollowsABuildThatFailsWhileWatched(t *testing.T) {
 		t.Errorf("the digest did not appear when the build failed under the pane:\n%s", got)
 	}
 }
+
+// longLog is a log whose errors sit far enough apart that jumping between them
+// actually moves the viewport.
+func longLog(errorsAt ...int) []string {
+	lines := make([]string, 120)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i)
+	}
+	for _, at := range errorsAt {
+		lines[at] = "##[error]boom " + fmt.Sprint(at)
+	}
+	return lines
+}
+
+func loadedLogs(t *testing.T, lines []string) *Logs {
+	t.Helper()
+	m := newLogs(t, azdo.StatusSucceeded)
+	updated, _ := m.Update(logChunksMsg{Status: azdo.StatusSucceeded,
+		Chunks: []azdo.LogChunk{{Task: "Build", LogID: 7, Lines: lines}}})
+	m = updated.(*Logs)
+	m.Body(120, 10)
+	m.viewport.GotoTop()
+	return m
+}
+
+func pressLog(t *testing.T, m *Logs, key string) *Logs {
+	t.Helper()
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+	return updated.(*Logs)
+}
+
+func TestLogsJumpsToTheNextError(t *testing.T) {
+	m := loadedLogs(t, longLog(40))
+	m = pressLog(t, m, "n")
+
+	// The task rule is a blank line and a heading before the log's own first
+	// line, so the fortieth line is the forty-second row.
+	if got := m.viewport.YOffset; got != 42 {
+		t.Errorf("offset = %d, want 42 — the error's row", got)
+	}
+}
+
+func TestLogsWrapsBackToTheFirstError(t *testing.T) {
+	m := loadedLogs(t, longLog(40, 80))
+
+	m = pressLog(t, m, "n")
+	first := m.viewport.YOffset
+	m = pressLog(t, m, "n")
+	if m.viewport.YOffset <= first {
+		t.Fatalf("second press went to %d, want past the first error at %d", m.viewport.YOffset, first)
+	}
+	m = pressLog(t, m, "n")
+	if got := m.viewport.YOffset; got != first {
+		t.Errorf("offset = %d, want %d — the third press should wrap", got, first)
+	}
+}
+
+func TestLogsSaysWhenThereIsNoErrorToJumpTo(t *testing.T) {
+	m := loadedLogs(t, longLog())
+	m = pressLog(t, m, "n")
+
+	status, _ := m.Status()
+	if !strings.Contains(status, "no error") {
+		t.Errorf("status = %q, want it to say there is nothing to jump to", status)
+	}
+	if m.viewport.YOffset != 0 {
+		t.Errorf("offset = %d, want the pane left where it was", m.viewport.YOffset)
+	}
+}
+
+func TestLogsCountsRowsNotLinesWhenJumping(t *testing.T) {
+	// An endgroup marker writes no row at all, so a jump that counted lines
+	// would land one row past the error for every group the log closed. The
+	// filler underneath is there so the pane has somewhere to scroll to: a
+	// viewport already at the end of a short log cannot move, which would
+	// pass this test for the wrong reason.
+	lines := append([]string{"##[group]setup", "warming up", "##[endgroup]", "##[error]boom"}, longLog()...)
+	m := loadedLogs(t, lines)
+
+	m = pressLog(t, m, "n")
+
+	// Two rows for the task rule, then the group and its one line; the
+	// endgroup writes nothing, so the error is the fifth row.
+	if got := m.viewport.YOffset; got != 4 {
+		t.Errorf("offset = %d, want 4 — the endgroup marker occupies no row", got)
+	}
+}
+
+func TestLogsOffersTheJumpKey(t *testing.T) {
+	m := loadedLogs(t, longLog(40))
+	if got := helpLine(m.Keys()); !strings.Contains(got, "n next error") {
+		t.Errorf("help = %q, want the jump key named", got)
+	}
+}

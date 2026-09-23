@@ -83,6 +83,15 @@ var (
 	// claim on the letter and it belongs to a view this one cannot reach.
 	keyStamps = key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "timestamps"))
 
+	// keyNextError jumps the log pane to the next "##[error]" line, wrapping
+	// at the end. There is deliberately no key for the previous one: the
+	// obvious pair — N and p — both already mean something on the build list
+	// this pane opens from, and a key that means one thing on a list and
+	// another on the pane it opens is the trap keyDiff's comment names.
+	// Wrapping is what a single key buys instead: pressing it again from the
+	// last error comes back round to the first.
+	keyNextError = key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next error"))
+
 	// The three build actions are capitals because their lower-case letters
 	// are all spoken for in views reachable from the build list: r refreshes
 	// everywhere, c replies on a pull request the builds view links to, and n
