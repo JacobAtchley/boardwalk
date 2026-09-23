@@ -245,8 +245,23 @@ func TestLogRowsAgreesWithWhatIsWritten(t *testing.T) {
 	// The jump keys index the buffer by row, and the writer is what puts rows
 	// in it. Two counts of the same thing drift silently, so they are checked
 	// against each other here.
-	for _, l := range []logLine{
-		{Level: levelPlain, Text: "plain"},
+	for _, stamps := range []bool{false, true} {
+		for _, l := range lineOfEachLevel() {
+			var b strings.Builder
+			writeLogLine(&b, l, stamps)
+			if got := strings.Count(b.String(), "\n"); got != logRows(l) {
+				t.Errorf("level %v, stamps %v: writer put %d rows in the buffer, logRows says %d",
+					l.Level, stamps, got, logRows(l))
+			}
+		}
+	}
+}
+
+// lineOfEachLevel is one line per level, each carrying a timestamp, so that
+// the row count can be checked with the prefix shown as well as hidden.
+func lineOfEachLevel() []logLine {
+	return []logLine{
+		{Level: levelPlain, Stamp: "2026-09-18T13:49:02.1234567Z", Text: "plain"},
 		{Level: levelError, Text: "boom"},
 		{Level: levelWarning, Text: "careful"},
 		{Level: levelSection, Text: "section"},
@@ -255,11 +270,5 @@ func TestLogRowsAgreesWithWhatIsWritten(t *testing.T) {
 		{Level: levelCommand, Text: "go build"},
 		{Level: levelDebug, Text: "debug"},
 		{Level: levelTaskRule, Text: "── Build ──"},
-	} {
-		var b strings.Builder
-		writeLogLine(&b, l, false)
-		if got := strings.Count(b.String(), "\n"); got != logRows(l) {
-			t.Errorf("level %v: writer put %d rows in the buffer, logRows says %d", l.Level, got, logRows(l))
-		}
 	}
 }

@@ -616,3 +616,160 @@ func TestLogsDoesNotRepeatLinesAfterTheFilterIsTurnedOff(t *testing.T) {
 		t.Errorf("the line appears %d times, want once:\n%s", got, view)
 	}
 }
+
+func TestLogsWrapsFromAnErrorOnTheLastLine(t *testing.T) {
+	// The error that matters is usually the last thing a failed build wrote,
+	// and the viewport cannot scroll it to the top — there are not enough
+	// rows below it. The offset it reports back is therefore not the row the
+	// jump asked for, which is what a wrap has to be decided from.
+	m := loadedLogs(t, longLog(10, 119))
+
+	m = pressLog(t, m, "n")
+	first := m.viewport.YOffset
+	m = pressLog(t, m, "n")
+	m = pressLog(t, m, "n")
+
+	if got := m.viewport.YOffset; got != first {
+		t.Errorf("offset = %d, want %d — the jump never came back round", got, first)
+	}
+}
+
+func TestLogsDigestFitsTheWidthItWasGiven(t *testing.T) {
+	// Root sizes the pane from lipgloss.Height, which counts newlines and
+	// cannot see a terminal wrapping a row too wide for it. A digest row over
+	// the width therefore costs rows nobody budgeted for, and pushes the help
+	// and status lines off the bottom.
+	m := failedLogs(t, []azdo.Record{
+		{Name: "Run a multi-line script inside a container job on a self-hosted pool", Type: "Task",
+			Result: "failed", Order: 1, LogID: 7, Issues: []azdo.Issue{
+				{Type: "error", Message: strings.Repeat("stack frame ", 30)},
+			}},
+		{Name: strings.Repeat("Publish ", 20), Type: "Task", Result: "failed", Order: 2, LogID: 8},
+	})
+
+	for _, row := range strings.Split(m.digestView(60, 30), "\n") {
+		if got := lipgloss.Width(row); got > 60 {
+			t.Errorf("digest row is %d columns wide in a 60 column pane: %q", got, row)
+		}
+	}
+}
+
+func TestLogsDigestCountsWhatItActuallyHid(t *testing.T) {
+	m := failedLogs(t, []azdo.Record{
+		{Name: "Test", Type: "Task", Result: "failed", Order: 1, LogID: 7, Issues: []azdo.Issue{
+			{Type: "error", Message: "one"},
+			{Type: "error", Message: "two"},
+			{Type: "error", Message: "three"},
+			{Type: "error", Message: "four"},
+		}},
+	})
+
+	// Five rows — the task and its four errors — into a pane with room for
+	// four, so three are kept and two are hidden behind the summary row.
+	got := m.digestView(120, 12)
+	if !strings.Contains(got, "+2 more") {
+		t.Errorf("digest = %q, want it to report the two rows it hid", got)
+	}
+}
+
+func TestLogsGivesAVeryShortPaneNoDigestAtAll(t *testing.T) {
+	m := failedLogs(t, []azdo.Record{
+		{Name: "Test", Type: "Task", Result: "failed", Order: 1, LogID: 7,
+			Issues: []azdo.Issue{{Type: "error", Message: "boom"}}},
+	})
+
+	if got := m.digestView(120, 2); got != "" {
+		t.Errorf("digest = %q, want none — there is no room for it and the log both", got)
+	}
+}
+
+func TestLogsKeepsThePlaceWhenTheFilterGoesOff(t *testing.T) {
+	// The second press of e is the whole point of the filter: you found the
+	// error, and now you want the output around it. Landing back at row 0 of
+	// a few thousand lines throws that away.
+	var at []int
+	for i := 0; i < 30; i++ {
+		at = append(at, i*4)
+	}
+	m := loadedLogs(t, longLog(at...))
+
+	m = pressLog(t, m, "e")
+	// The sixteenth error, which is the rule's two rows plus fifteen.
+	m.viewport.SetYOffset(17)
+	m = pressLog(t, m, "e")
+
+	// That error is the log's line 60, and the log starts under the rule's
+	// two rows.
+	if got := m.viewport.YOffset; got != 62 {
+		t.Errorf("offset = %d, want 62 — the error the reader was looking at", got)
+	}
+}
+
+func TestLogsKeepsThePlaceWhenTheFilterGoesOn(t *testing.T) {
+	var at []int
+	for i := 0; i < 30; i++ {
+		at = append(at, i*4)
+	}
+	m := loadedLogs(t, longLog(at...))
+	m.viewport.SetYOffset(60) // somewhere in the middle of the log
+
+	m = pressLog(t, m, "e")
+
+	// Filtered, the buffer is the task rule and the thirty errors. The line
+	// at row 60 is line 58, whose next error is the one on line 60 — the
+	// sixteenth, and so the rule's two rows plus fifteen.
+	if got := m.viewport.YOffset; got != 17 {
+		t.Errorf("offset = %d, want 17 — the first error at or after where the reader was", got)
+	}
+}
+
+func TestLogsWithholdsTheDigestWhileTheBuildIsStillRunning(t *testing.T) {
+	c := &azdo.Client{Org: "acme", Project: "Platform"}
+	build := azdo.Build{ID: 9001, Number: "1", Pipeline: "platform-ci", Status: azdo.StatusRunning}
+	// A task that has already failed under a build that has not finished: the
+	// run can still end up green, and calling it failed would be wrong.
+	m := NewLogs(c, build, []azdo.Record{
+		{Name: "Test", Type: "Task", Result: "failed", Order: 1, LogID: 7,
+			Issues: []azdo.Issue{{Type: "error", Message: "a retried step"}}},
+	})
+
+	if got := m.Body(120, 20); strings.Contains(got, "a retried step") {
+		t.Errorf("a running build was given a failure digest:\n%s", got)
+	}
+}
+
+func TestLogsShowsTheDigestForAPartiallySucceededBuild(t *testing.T) {
+	c := &azdo.Client{Org: "acme", Project: "Platform"}
+	build := azdo.Build{ID: 9001, Number: "1", Pipeline: "platform-ci", Status: azdo.StatusPartial}
+	m := NewLogs(c, build, []azdo.Record{
+		{Name: "Test", Type: "Task", Result: "failed", Order: 1, LogID: 7,
+			Issues: []azdo.Issue{{Type: "error", Message: "one suite broke"}}},
+	})
+
+	if got := m.Body(120, 20); !strings.Contains(got, "one suite broke") {
+		t.Errorf("a partially succeeded build hid what failed in it:\n%s", got)
+	}
+}
+
+func TestLogsJumpsWithinThePaneTheDigestLeft(t *testing.T) {
+	// The digest takes rows off the viewport, so an error the pane could
+	// scroll to the top without it may not be reachable with it.
+	m := failedLogs(t, []azdo.Record{
+		{Name: "Test", Type: "Task", Result: "failed", Order: 1, LogID: 7,
+			Issues: []azdo.Issue{{Type: "error", Message: "boom"}}},
+	})
+	updated, _ := m.Update(logChunksMsg{Status: azdo.StatusFailed,
+		Chunks: []azdo.LogChunk{{Task: "Test", LogID: 7, Lines: longLog(10, 119)}}})
+	m = updated.(*Logs)
+	m.Body(120, 12)
+	m.viewport.GotoTop()
+
+	m = pressLog(t, m, "n")
+	first := m.viewport.YOffset
+	m = pressLog(t, m, "n")
+	m = pressLog(t, m, "n")
+
+	if got := m.viewport.YOffset; got != first {
+		t.Errorf("offset = %d, want %d — the jump did not come back round under the digest", got, first)
+	}
+}

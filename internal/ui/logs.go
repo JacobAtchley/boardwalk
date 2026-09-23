@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -66,15 +67,28 @@ type Logs struct {
 	// line's row known without counting the buffer again.
 	rowCount int
 
-	// pending is how many lines have been recorded but not yet written to the
-	// buffer — the lines one append is about to render.
-	pending int
+	// jumpRow is the row the last jump asked for and jumpOffset is where the
+	// viewport actually landed, which are not the same number: an error near
+	// the end of a log cannot be scrolled to the top, so SetYOffset clamps.
+	// Deciding the next jump from the offset alone therefore picked the same
+	// error forever and never came back round. Both start at -1, which no row
+	// can be, so the first press reads the viewport rather than a jump that
+	// never happened.
+	jumpRow, jumpOffset int
 
 	// errRows is the buffer row each error line landed on, in order, which is
 	// what keyNextError jumps between. Rows rather than indexes into lines:
 	// see logRows for why the two are not the same number. It is rebuilt
 	// wherever the buffer is.
 	errRows []int
+
+	// rowOf and lineOf are the two directions of the same map, one entry per
+	// line the buffer actually holds: which row a line starts on, and which
+	// line that was. Both are ascending, so both are searchable. They are
+	// what lets the error filter keep the reader's place — the row numbers
+	// mean nothing across a filter, but the line they were looking at is the
+	// same line either way.
+	rowOf, lineOf []int
 
 	// fetching is a single-flight guard. fetch's closure mutates m.cursor in
 	// place, and bubbletea runs each returned Cmd in its own goroutine — two
@@ -93,12 +107,14 @@ type Logs struct {
 // first poll lands.
 func NewLogs(c *azdo.Client, b azdo.Build, records []azdo.Record) *Logs {
 	return &Logs{
-		client:   c,
-		build:    b,
-		viewport: viewport.New(0, 0),
-		records:  records,
-		cursor:   azdo.LogCursor{},
-		work:     newWork(),
+		client:     c,
+		build:      b,
+		viewport:   viewport.New(0, 0),
+		records:    records,
+		cursor:     azdo.LogCursor{},
+		jumpRow:    -1,
+		jumpOffset: -1,
+		work:       newWork(),
 	}
 }
 
@@ -255,13 +271,18 @@ func (m *Logs) append(chunks []azdo.LogChunk) {
 	}
 
 	atBottom := m.viewport.AtBottom()
+	// Where this append's own lines start. A local rather than a field:
+	// nothing outside this call has any use for it, and the one time it lived
+	// on the struct it survived a rebuild and had the next append write the
+	// tail of the buffer twice.
+	start := len(m.lines)
 	for _, c := range chunks {
 		if c.Task != m.lastTask {
-			m.record(taskRule(c.Task))
+			m.lines = append(m.lines, taskRule(c.Task))
 			m.lastTask = c.Task
 		}
 		for _, line := range c.Lines {
-			m.record(parseLogLine(line))
+			m.lines = append(m.lines, parseLogLine(line))
 		}
 	}
 
@@ -273,10 +294,9 @@ func (m *Logs) append(chunks []azdo.LogChunk) {
 		m.rebuild()
 		return
 	}
-	for _, l := range m.lines[len(m.lines)-m.pending:] {
-		m.write(l)
+	for i := start; i < len(m.lines); i++ {
+		m.write(i, m.lines[i])
 	}
-	m.pending = 0
 	m.viewport.SetContent(m.text.String())
 	// Following the tail is only useful if the reader has not scrolled away.
 	if atBottom {
@@ -284,24 +304,40 @@ func (m *Logs) append(chunks []azdo.LogChunk) {
 	}
 }
 
-// record keeps a line without rendering it: whether it is rendered, and
-// whether the heading above it is, is append's decision once the whole chunk
-// is in.
-func (m *Logs) record(l logLine) {
-	m.lines = append(m.lines, l)
-	m.pending++
-}
-
 // write renders one line onto the end of the buffer and notes where it landed,
 // so that a jump has somewhere to jump to. Both the append path and the
 // rebuild path go through here: an index maintained in only one of them would
 // be right until the first timestamp toggle.
-func (m *Logs) write(l logLine) {
+func (m *Logs) write(index int, l logLine) {
 	if l.Level == levelError {
 		m.errRows = append(m.errRows, m.rowCount)
 	}
+	m.rowOf = append(m.rowOf, m.rowCount)
+	m.lineOf = append(m.lineOf, index)
 	m.rowCount += logRows(l)
 	writeLogLine(&m.text, l, m.showStamps)
+}
+
+// lineAtTop is the line the pane is currently showing first, as an index into
+// lines rather than a row.
+func (m *Logs) lineAtTop() int {
+	if len(m.rowOf) == 0 {
+		return 0
+	}
+	after := sort.Search(len(m.rowOf), func(i int) bool { return m.rowOf[i] > m.viewport.YOffset })
+	return m.lineOf[max(0, after-1)]
+}
+
+// rowOfLine is the row to scroll to in order to show a line again: its own
+// row, or the first row after it when the line itself is not in the buffer —
+// which is the ordinary case on the way into the filter, where the line the
+// reader was on is most of what the filter throws away.
+func (m *Logs) rowOfLine(index int) int {
+	at := sort.Search(len(m.lineOf), func(i int) bool { return m.lineOf[i] >= index })
+	if at == len(m.lineOf) {
+		return m.rowCount
+	}
+	return m.rowOf[at]
 }
 
 // toggleErrors cuts the pane down to its errors, or gives the log back.
@@ -315,12 +351,19 @@ func (m *Logs) toggleErrors() {
 		return
 	}
 
+	// The offset belongs to the buffer being replaced — a row number means
+	// nothing once most of the rows are gone, or once they are all back — but
+	// the line under it is the same line either way, so that is what the pane
+	// is put back on.
+	anchor := m.lineAtTop()
 	m.showErrors = !m.showErrors
 	m.rebuild()
-	// The offset it was at belonged to the other buffer: a row number means
-	// nothing once most of the rows are gone, or once they are all back.
-	m.viewport.GotoTop()
-	m.status, m.failed = "", false
+	m.viewport.SetYOffset(m.rowOfLine(anchor))
+	// A failed poll's message is left alone: it is the pane's most recent
+	// news, and this key has nothing to say over it.
+	if !m.failed {
+		m.status = ""
+	}
 }
 
 func (m *Logs) hasErrors() bool {
@@ -332,22 +375,17 @@ func (m *Logs) hasErrors() bool {
 	return false
 }
 
-// visibleLines is what the buffer is rendered from: every line, or — filtered
-// — the errors and the task headings that own them. A heading whose task
-// reported nothing is left out too; keeping it would say a task failed when
-// all it did was run.
-func (m *Logs) visibleLines() []logLine {
-	if !m.showErrors {
-		return m.lines
-	}
-
-	out := make([]logLine, 0, 16)
+// errorIndexes is what the filtered buffer is rendered from: the errors and
+// the task headings that own them. A heading whose task reported nothing is
+// left out too; keeping it would say a task failed when all it did was run.
+func (m *Logs) errorIndexes() []int {
+	out := make([]int, 0, 16)
 	for i, l := range m.lines {
 		switch {
 		case l.Level == levelError:
-			out = append(out, l)
+			out = append(out, i)
 		case l.Level == levelTaskRule && taskHasError(m.lines[i+1:]):
-			out = append(out, l)
+			out = append(out, i)
 		}
 	}
 	return out
@@ -377,15 +415,29 @@ func (m *Logs) jumpToNextError() {
 		return
 	}
 
-	next := m.errRows[0]
+	// Where the next jump counts from: the row the last one asked for while
+	// the reader has left the pane alone, and wherever they scrolled to once
+	// they have moved it themselves.
+	floor := m.viewport.YOffset
+	if m.viewport.YOffset == m.jumpOffset {
+		floor = m.jumpRow
+	}
+
+	next, wrapped := m.errRows[0], true
 	for _, row := range m.errRows {
-		if row > m.viewport.YOffset {
-			next = row
+		if row > floor {
+			next, wrapped = row, false
 			break
 		}
 	}
+
 	m.viewport.SetYOffset(next)
-	m.status, m.failed = "", false
+	m.jumpRow, m.jumpOffset = next, m.viewport.YOffset
+	if wrapped {
+		// A jump that silently travels backwards reads as a jump that did
+		// nothing, since the error it lands on may already be on screen.
+		m.status, m.failed = "wrapped to the first error", false
+	}
 }
 
 // taskRule is the heading written between one task's output and the next. It
@@ -396,23 +448,35 @@ func taskRule(task string) logLine {
 	return logLine{Level: levelTaskRule, Text: "── " + task + " ──"}
 }
 
-// rebuild renders every line again, which is what the timestamp toggle needs:
-// the prefix is baked into the buffer at append time, so showing or hiding it
-// means rewriting what is already there. The scroll position is left exactly
-// where it was — the toggle is for reading the part of the log already on
-// screen, and throwing the reader back to the top would defeat it. Line count
-// does not change, so the offset still points at the same line.
+// rebuild renders the buffer again from the lines the pane has been given:
+// what the timestamp toggle needs, since the prefix is baked in at append
+// time, and what the error filter needs, since which lines belong on screen
+// changes with it.
+//
+// The offset is left where it was, which is right for the timestamp toggle —
+// that rewrite changes no line's row, and throwing the reader back to the top
+// would defeat a toggle meant for the part of the log already on screen. It is
+// not right for the filter, where a row means something else on the other side
+// of the rebuild; toggleErrors sets the offset itself afterwards, by line
+// rather than by row.
 func (m *Logs) rebuild() {
 	offset := m.viewport.YOffset
 	atBottom := m.viewport.AtBottom()
 
 	m.text.Reset()
-	// A rebuild has written every recorded line, so nothing is left pending:
-	// leaving a count behind here had the next append write the tail of the
-	// buffer a second time.
-	m.errRows, m.rowCount, m.pending = nil, 0, 0
-	for _, l := range m.visibleLines() {
-		m.write(l)
+	m.errRows, m.rowCount = nil, 0
+	m.rowOf, m.lineOf = nil, nil
+	// The rows the last jump remembered belonged to the buffer being replaced.
+	m.jumpRow, m.jumpOffset = -1, -1
+
+	if m.showErrors {
+		for _, i := range m.errorIndexes() {
+			m.write(i, m.lines[i])
+		}
+	} else {
+		for i, l := range m.lines {
+			m.write(i, l)
+		}
 	}
 	m.viewport.SetContent(m.text.String())
 
@@ -440,9 +504,9 @@ func (m *Logs) Body(width, height int) string {
 	}
 
 	m.viewport.Width, m.viewport.Height = width, height
-	body := m.viewport.View()
-	if m.text.Len() == 0 {
-		body = chromeStyle.Render(m.work.View() + "fetching the build log…")
+	body := chromeStyle.Render(m.work.View() + "fetching the build log…")
+	if m.text.Len() > 0 {
+		body = m.viewport.View()
 	}
 	if digest == "" {
 		return body
@@ -465,30 +529,45 @@ func (m *Logs) digestView(width, height int) string {
 		return ""
 	}
 
-	rows := digestLines(failures, width)
 	// A third of the pane, so the digest stays a heading over the log rather
-	// than a second pane competing with it.
-	if room := min(digestRows, height/3); len(rows) > room {
-		hidden := len(rows) - room + 1
-		rows = append(rows[:max(0, room-1)], chromeStyle.Render(fmt.Sprintf("  +%d more — the log is below", hidden)))
+	// than a second pane competing with it. A pane too short for even one row
+	// gets no digest at all: a summary that left room for none of the log
+	// would be answering the question by hiding the evidence.
+	room := min(digestRows, height/3)
+	if room < 1 {
+		return ""
+	}
+
+	rows := digestLines(failures, width)
+	if len(rows) > room {
+		kept := rows[:room-1]
+		hidden := len(rows) - len(kept)
+		rows = append(kept, truncate(chromeStyle.Render(
+			fmt.Sprintf("  +%d more — the log is below", hidden)), width))
 	}
 	return strings.Join(rows, "\n")
 }
 
-// digestLines renders one row per failed task and one per error under it. A
-// message is taken to its first line and cut to the width: Azure DevOps error
-// messages run to stack traces, and the digest is the summary that sends you
-// to the log, not a replacement for reading it.
+// digestLines renders one row per failed task and one per error under it.
+//
+// Every row is cut to the width, task names included: Azure DevOps error
+// messages run to stack traces and a task's display name is whatever its YAML
+// called it, while Root sizes the pane by counting newlines — a row wider than
+// the terminal wraps into rows nobody budgeted for, and pushes the help and
+// status lines off the bottom. A message is taken to its first line for the
+// same reason; the digest is the summary that sends you to the log, not a
+// replacement for reading it.
 func digestLines(failures []azdo.Failure, width int) []string {
 	var rows []string
 	for _, f := range failures {
-		rows = append(rows, errStyle.Render("✗ "+f.Task))
+		rows = append(rows, errStyle.Render(truncate("✗ "+f.Task, width)))
 		if len(f.Errors) == 0 {
-			rows = append(rows, chromeStyle.Render("    no error message published — see its log below"))
+			rows = append(rows, chromeStyle.Render(
+				truncate("    no error message published — see its log below", width)))
 			continue
 		}
 		for _, e := range f.Errors {
-			rows = append(rows, "    "+truncate(firstLine(e), max(1, width-4)))
+			rows = append(rows, truncate("    "+firstLine(e), width))
 		}
 	}
 	return rows
