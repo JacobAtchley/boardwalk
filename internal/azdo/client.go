@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -68,8 +69,19 @@ type Client struct {
 	groupsErr error
 	idErr     error
 
+	// mu guards token, which outlives the token itself: an az token is good
+	// for about an hour and boardwalk is meant to be left open longer than
+	// that, so send replaces it mid-session. Requests run on several
+	// goroutines, so the swap needs a lock.
+	mu    sync.Mutex
 	token string
-	http  *http.Client
+
+	// newToken mints a replacement. It is a field so tests can hand over a
+	// token without an az install, the same way baseURL stands in for the
+	// host; production leaves it nil and falls back to the az CLI.
+	newToken func() (string, error)
+
+	http *http.Client
 
 	// baseURL overrides https://dev.azure.com in tests. Empty in production.
 	baseURL string
@@ -84,7 +96,7 @@ func NewClient(org, project string) (*Client, error) {
 		return nil, fmt.Errorf("organization and project are both required")
 	}
 
-	token, err := az("account", "get-access-token", "--resource", Resource, "--query", "accessToken", "-o", "tsv")
+	token, err := azToken()
 	if err != nil {
 		return nil, fmt.Errorf("could not get an Azure DevOps token (is `az login` current?): %w", err)
 	}
@@ -335,18 +347,123 @@ func (c *Client) do(req *http.Request, out any) error {
 
 // send attaches credentials and turns any non-2xx into an error carrying the
 // message Azure DevOps put in the body.
+//
+// A token from az is good for about an hour, which is shorter than boardwalk
+// is meant to be left open, so a session that was working goes on working
+// only if the token is replaced underneath it. A rejected request is retried
+// once against a fresh token rather than surfaced: the az login behind it is
+// still current, and the user has nothing to do about an expiry they cannot
+// see. When the refresh itself fails the login really is gone, and that is
+// worth saying.
 func (c *Client) send(req *http.Request) (*http.Response, error) {
-	req.Header.Set("Authorization", "Bearer "+c.token)
-
-	resp, err := c.http.Do(req)
+	stale := c.currentToken()
+	resp, err := c.attempt(req, stale)
 	if err != nil {
 		return nil, err
+	}
+
+	if rejected(resp) {
+		// Read why before the retry discards it. A refresh that then fails
+		// leaves this as the only account of what the server actually said,
+		// and a 401 the token had aged out of reads nothing like one it was
+		// never scoped for.
+		refused := fmt.Sprintf("%s: %s", resp.Status, apiError(resp.Body))
+		resp.Body.Close()
+
+		fresh, err := c.refresh(stale)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", refused, err)
+		}
+		retry, err := replayable(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp, err = c.attempt(retry, fresh); err != nil {
+			return nil, err
+		}
+	}
+
+	if rejected(resp) {
+		defer resp.Body.Close()
+		return nil, fmt.Errorf("%s: %s (is `az login` current?)", resp.Status, apiError(resp.Body))
 	}
 	if resp.StatusCode >= 300 {
 		defer resp.Body.Close()
 		return nil, fmt.Errorf("%s: %s", resp.Status, apiError(resp.Body))
 	}
 	return resp, nil
+}
+
+// attempt runs one request under one token.
+func (c *Client) attempt(req *http.Request, token string) (*http.Response, error) {
+	req.Header.Set("Authorization", "Bearer "+token)
+	return c.http.Do(req)
+}
+
+// rejected says whether a response is Azure DevOps refusing the credentials.
+// It answers that two ways: a plain 401, and a 203 carrying the sign-in page,
+// which is not an error status at all and would otherwise be decoded as the
+// payload and fail as malformed JSON.
+func rejected(resp *http.Response) bool {
+	return resp.StatusCode == http.StatusUnauthorized ||
+		resp.StatusCode == http.StatusNonAuthoritativeInfo
+}
+
+// replayable copies a request that has already been sent, restoring the body
+// a write consumed. Every request boardwalk builds carries a bytes.Reader, so
+// net/http fills in GetBody and the copy is exact.
+func replayable(req *http.Request) (*http.Request, error) {
+	clone := req.Clone(req.Context())
+	if req.GetBody == nil {
+		return clone, nil
+	}
+	body, err := req.GetBody()
+	if err != nil {
+		return nil, fmt.Errorf("could not resend the request after refreshing the token: %w", err)
+	}
+	clone.Body = body
+	return clone, nil
+}
+
+// currentToken reads the token the next request should carry.
+func (c *Client) currentToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.token
+}
+
+// refresh replaces the token that was just refused and returns the new one.
+//
+// stale is the token the caller sent. When it no longer matches, a request on
+// another goroutine hit the same expiry first and has already paid for a new
+// one — asking az again would mint a second token for no reason.
+func (c *Client) refresh(stale string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.token != stale {
+		return c.token, nil
+	}
+
+	token, err := c.mint()
+	if err != nil {
+		return "", fmt.Errorf("could not refresh the Azure DevOps token (is `az login` current?): %w", err)
+	}
+	c.token = token
+	return token, nil
+}
+
+// mint asks for a token, through the test seam when one is set.
+func (c *Client) mint() (string, error) {
+	if c.newToken != nil {
+		return c.newToken()
+	}
+	return azToken()
+}
+
+// azToken asks the az CLI for a bearer token for the Azure DevOps API.
+func azToken() (string, error) {
+	return az("account", "get-access-token", "--resource", Resource, "--query", "accessToken", "-o", "tsv")
 }
 
 // apiError pulls the human-readable half out of an Azure DevOps error body.

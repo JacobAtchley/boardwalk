@@ -107,6 +107,14 @@ boardwalk implements no auth flow of its own. It asks the az CLI for a token
 against the Azure DevOps resource id and rides whatever session `az login`
 already established, so there is nothing extra to configure or store.
 
+That token is good for about an hour, which is shorter than boardwalk is meant
+to be left open. When Azure DevOps refuses one — as a 401, or as the 203 that
+carries a sign-in page instead of an answer — boardwalk asks az for a new token
+and sends the request again, so a session left open overnight keeps working
+without a restart. Only when the refresh itself fails, which means the `az
+login` behind it has expired rather than the token, does the error reach the
+screen, and it says so.
+
 ## Usage
 
 ```sh
