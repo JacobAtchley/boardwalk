@@ -7,6 +7,7 @@ import (
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func newLogs(t *testing.T, status azdo.BuildStatus) *Logs {
@@ -297,5 +298,478 @@ func TestLogsStripsTheAzureMarkers(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Errorf("the marker took %q with it:\n%s", want, view)
 		}
+	}
+}
+
+// failedLogs is a log pane over a failed build whose timeline says what broke.
+func failedLogs(t *testing.T, records []azdo.Record) *Logs {
+	t.Helper()
+	c := &azdo.Client{Org: "acme", Project: "Platform"}
+	build := azdo.Build{ID: 9001, Number: "20260911.3", Pipeline: "platform-ci", Status: azdo.StatusFailed}
+	m := NewLogs(c, build, records)
+	m.Body(120, 20)
+	return m
+}
+
+func TestLogsNamesWhyTheBuildFailedWithoutReadingTheLog(t *testing.T) {
+	m := failedLogs(t, []azdo.Record{
+		{Name: "Restore", Type: "Task", Result: "succeeded", Order: 1, LogID: 6},
+		{Name: "Test", Type: "Task", Result: "failed", Order: 2, LogID: 7, Issues: []azdo.Issue{
+			{Type: "error", Message: "TestThing: want 3, got 4"},
+		}},
+	})
+
+	view := m.Body(120, 20)
+	if !strings.Contains(view, "Test") || !strings.Contains(view, "TestThing: want 3, got 4") {
+		t.Errorf("the failing task and its error are not on screen:\n%s", view)
+	}
+}
+
+func TestLogsShowsNoDigestWhenTheBuildSucceeded(t *testing.T) {
+	c := &azdo.Client{Org: "acme", Project: "Platform"}
+	build := azdo.Build{ID: 9001, Number: "1", Pipeline: "platform-ci", Status: azdo.StatusSucceeded}
+	m := NewLogs(c, build, []azdo.Record{
+		{Name: "Test", Type: "Task", Result: "succeeded", Order: 1, LogID: 7,
+			Issues: []azdo.Issue{{Type: "warning", Message: "slow"}}},
+	})
+
+	if got := m.Body(120, 20); strings.Contains(got, "slow") {
+		t.Errorf("a succeeded build was given a failure digest:\n%s", got)
+	}
+}
+
+func TestLogsSaysAFailedTaskPublishedNothing(t *testing.T) {
+	m := failedLogs(t, []azdo.Record{{Name: "Publish", Type: "Task", Result: "failed", Order: 1, LogID: 7}})
+
+	view := m.Body(120, 20)
+	if !strings.Contains(view, "Publish") {
+		t.Errorf("the failing task is not named:\n%s", view)
+	}
+	if !strings.Contains(view, "no error message") {
+		t.Errorf("nothing says why there is nothing to quote:\n%s", view)
+	}
+}
+
+func TestLogsDigestIsCappedAndSaysWhatItLeftOut(t *testing.T) {
+	var issues []azdo.Issue
+	for i := 0; i < 20; i++ {
+		issues = append(issues, azdo.Issue{Type: "error", Message: fmt.Sprintf("error %d", i)})
+	}
+	m := failedLogs(t, []azdo.Record{
+		{Name: "Test", Type: "Task", Result: "failed", Order: 1, LogID: 7, Issues: issues},
+	})
+	m.Update(logChunksMsg{Status: azdo.StatusFailed,
+		Chunks: []azdo.LogChunk{{Task: "Test", LogID: 7, Lines: []string{"the log itself"}}}})
+
+	view := m.Body(120, 20)
+	if got := lipgloss.Height(view); got > 20 {
+		t.Errorf("body is %d rows in a 20 row pane:\n%s", got, view)
+	}
+	if !strings.Contains(view, "more") {
+		t.Errorf("the digest hid errors without saying so:\n%s", view)
+	}
+	if !strings.Contains(view, "the log itself") {
+		t.Errorf("the digest crowded the log off the screen:\n%s", view)
+	}
+}
+
+func TestLogsDigestFollowsABuildThatFailsWhileWatched(t *testing.T) {
+	c := &azdo.Client{Org: "acme", Project: "Platform"}
+	build := azdo.Build{ID: 9001, Number: "1", Pipeline: "platform-ci", Status: azdo.StatusRunning}
+	m := NewLogs(c, build, []azdo.Record{{Name: "Test", Type: "Task", Order: 1, LogID: 7}})
+	m.Body(120, 20)
+
+	updated, _ := m.Update(logChunksMsg{
+		Status: azdo.StatusFailed,
+		Records: []azdo.Record{{Name: "Test", Type: "Task", Result: "failed", Order: 1, LogID: 7,
+			Issues: []azdo.Issue{{Type: "error", Message: "it broke"}}}},
+	})
+	m = updated.(*Logs)
+
+	if got := m.Body(120, 20); !strings.Contains(got, "it broke") {
+		t.Errorf("the digest did not appear when the build failed under the pane:\n%s", got)
+	}
+}
+
+// longLog is a log whose errors sit far enough apart that jumping between them
+// actually moves the viewport.
+func longLog(errorsAt ...int) []string {
+	lines := make([]string, 120)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i)
+	}
+	for _, at := range errorsAt {
+		lines[at] = "##[error]boom " + fmt.Sprint(at)
+	}
+	return lines
+}
+
+func loadedLogs(t *testing.T, lines []string) *Logs {
+	t.Helper()
+	m := newLogs(t, azdo.StatusSucceeded)
+	updated, _ := m.Update(logChunksMsg{Status: azdo.StatusSucceeded,
+		Chunks: []azdo.LogChunk{{Task: "Build", LogID: 7, Lines: lines}}})
+	m = updated.(*Logs)
+	m.Body(120, 10)
+	m.viewport.GotoTop()
+	return m
+}
+
+func pressLog(t *testing.T, m *Logs, key string) *Logs {
+	t.Helper()
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+	return updated.(*Logs)
+}
+
+func TestLogsJumpsToTheNextError(t *testing.T) {
+	m := loadedLogs(t, longLog(40))
+	m = pressLog(t, m, "n")
+
+	// The task rule is a blank line and a heading before the log's own first
+	// line, so the fortieth line is the forty-second row.
+	if got := m.viewport.YOffset; got != 42 {
+		t.Errorf("offset = %d, want 42 — the error's row", got)
+	}
+}
+
+func TestLogsWrapsBackToTheFirstError(t *testing.T) {
+	m := loadedLogs(t, longLog(40, 80))
+
+	m = pressLog(t, m, "n")
+	first := m.viewport.YOffset
+	m = pressLog(t, m, "n")
+	if m.viewport.YOffset <= first {
+		t.Fatalf("second press went to %d, want past the first error at %d", m.viewport.YOffset, first)
+	}
+	m = pressLog(t, m, "n")
+	if got := m.viewport.YOffset; got != first {
+		t.Errorf("offset = %d, want %d — the third press should wrap", got, first)
+	}
+}
+
+func TestLogsSaysWhenThereIsNoErrorToJumpTo(t *testing.T) {
+	m := loadedLogs(t, longLog())
+	m = pressLog(t, m, "n")
+
+	status, _ := m.Status()
+	if !strings.Contains(status, "no error") {
+		t.Errorf("status = %q, want it to say there is nothing to jump to", status)
+	}
+	if m.viewport.YOffset != 0 {
+		t.Errorf("offset = %d, want the pane left where it was", m.viewport.YOffset)
+	}
+}
+
+func TestLogsCountsRowsNotLinesWhenJumping(t *testing.T) {
+	// An endgroup marker writes no row at all, so a jump that counted lines
+	// would land one row past the error for every group the log closed. The
+	// filler underneath is there so the pane has somewhere to scroll to: a
+	// viewport already at the end of a short log cannot move, which would
+	// pass this test for the wrong reason.
+	lines := append([]string{"##[group]setup", "warming up", "##[endgroup]", "##[error]boom"}, longLog()...)
+	m := loadedLogs(t, lines)
+
+	m = pressLog(t, m, "n")
+
+	// Two rows for the task rule, then the group and its one line; the
+	// endgroup writes nothing, so the error is the fifth row.
+	if got := m.viewport.YOffset; got != 4 {
+		t.Errorf("offset = %d, want 4 — the endgroup marker occupies no row", got)
+	}
+}
+
+func TestLogsOffersTheJumpKey(t *testing.T) {
+	m := loadedLogs(t, longLog(40))
+	if got := helpLine(m.Keys()); !strings.Contains(got, "n next error") {
+		t.Errorf("help = %q, want the jump key named", got)
+	}
+}
+
+func TestLogsErrorsOnlyLeavesOrdinaryOutputOut(t *testing.T) {
+	m := loadedLogs(t, []string{"compiling", "##[error]boom", "linking"})
+
+	m = pressLog(t, m, "e")
+
+	view := m.Body(120, 20)
+	if !strings.Contains(view, "boom") {
+		t.Errorf("the error is missing:\n%s", view)
+	}
+	if strings.Contains(view, "compiling") || strings.Contains(view, "linking") {
+		t.Errorf("ordinary output survived the filter:\n%s", view)
+	}
+}
+
+func TestLogsErrorsOnlyKeepsTheTaskThatOwnsTheError(t *testing.T) {
+	m := newLogs(t, azdo.StatusFailed)
+	updated, _ := m.Update(logChunksMsg{Status: azdo.StatusFailed, Chunks: []azdo.LogChunk{
+		{Task: "Restore", LogID: 6, Lines: []string{"restoring"}},
+		{Task: "Test", LogID: 7, Lines: []string{"##[error]boom"}},
+	}})
+	m = updated.(*Logs)
+	m.Body(120, 20)
+
+	m = pressLog(t, m, "e")
+
+	view := m.Body(120, 20)
+	if !strings.Contains(view, "── Test ──") {
+		t.Errorf("the failing task's heading is missing, so the error belongs to nothing:\n%s", view)
+	}
+	if strings.Contains(view, "── Restore ──") {
+		t.Errorf("a task with no errors kept its heading:\n%s", view)
+	}
+}
+
+func TestLogsErrorsOnlyGivesTheLogBackOnASecondPress(t *testing.T) {
+	m := loadedLogs(t, []string{"compiling", "##[error]boom"})
+
+	m = pressLog(t, m, "e")
+	m = pressLog(t, m, "e")
+
+	if view := m.Body(120, 20); !strings.Contains(view, "compiling") {
+		t.Errorf("the log did not come back:\n%s", view)
+	}
+}
+
+func TestLogsErrorsOnlyKeepsFilteringWhatArrivesWhileTailing(t *testing.T) {
+	m := newLogs(t, azdo.StatusRunning)
+	updated, _ := m.Update(logChunksMsg{Status: azdo.StatusRunning,
+		Chunks: []azdo.LogChunk{{Task: "Test", LogID: 7, Lines: []string{"##[error]first"}}}})
+	m = updated.(*Logs)
+	m.Body(120, 20)
+	m = pressLog(t, m, "e")
+
+	updated, _ = m.Update(logChunksMsg{Status: azdo.StatusRunning,
+		Chunks: []azdo.LogChunk{{Task: "Test", LogID: 7, Lines: []string{"still going", "##[error]second"}}}})
+	m = updated.(*Logs)
+
+	view := m.Body(120, 20)
+	if !strings.Contains(view, "second") {
+		t.Errorf("an error that arrived while filtered is missing:\n%s", view)
+	}
+	if strings.Contains(view, "still going") {
+		t.Errorf("ordinary output that arrived while filtered got through:\n%s", view)
+	}
+}
+
+func TestLogsErrorsOnlyDeclinesWhenThereAreNoErrors(t *testing.T) {
+	m := loadedLogs(t, []string{"compiling", "linking"})
+
+	m = pressLog(t, m, "e")
+
+	status, _ := m.Status()
+	if !strings.Contains(status, "no error") {
+		t.Errorf("status = %q, want it to say there is nothing to filter to", status)
+	}
+	if view := m.Body(120, 20); !strings.Contains(view, "compiling") {
+		t.Errorf("the log was emptied out instead:\n%s", view)
+	}
+}
+
+func TestLogsJumpStillLandsOnErrorsWhileFiltered(t *testing.T) {
+	// Enough errors that the filtered buffer is still taller than the pane:
+	// a viewport with nowhere to scroll would pass this for the wrong reason.
+	var at []int
+	for i := 0; i < 30; i++ {
+		at = append(at, i*4)
+	}
+	m := loadedLogs(t, longLog(at...))
+
+	m = pressLog(t, m, "e")
+	m = pressLog(t, m, "n")
+
+	// Filtered, the buffer is the task rule's two rows and then the errors,
+	// so the first error is the third row.
+	if got := m.viewport.YOffset; got != 2 {
+		t.Errorf("offset = %d, want 2 — the first error in the filtered buffer", got)
+	}
+	m = pressLog(t, m, "n")
+	if got := m.viewport.YOffset; got != 3 {
+		t.Errorf("offset = %d, want 3 — the next error is the next row", got)
+	}
+}
+
+func TestLogsOffersTheErrorFilterKey(t *testing.T) {
+	m := loadedLogs(t, longLog(40))
+	if got := helpLine(m.Keys()); !strings.Contains(got, "e errors only") {
+		t.Errorf("help = %q, want the filter key named", got)
+	}
+}
+
+func TestLogsDoesNotRepeatLinesAfterTheFilterIsTurnedOff(t *testing.T) {
+	m := newLogs(t, azdo.StatusRunning)
+	updated, _ := m.Update(logChunksMsg{Status: azdo.StatusRunning,
+		Chunks: []azdo.LogChunk{{Task: "Test", LogID: 7, Lines: []string{"##[error]boom"}}}})
+	m = updated.(*Logs)
+	m.Body(120, 20)
+
+	m = pressLog(t, m, "e")
+	updated, _ = m.Update(logChunksMsg{Status: azdo.StatusRunning,
+		Chunks: []azdo.LogChunk{{Task: "Test", LogID: 7, Lines: []string{"while filtered"}}}})
+	m = updated.(*Logs)
+	m = pressLog(t, m, "e")
+	updated, _ = m.Update(logChunksMsg{Status: azdo.StatusRunning,
+		Chunks: []azdo.LogChunk{{Task: "Test", LogID: 7, Lines: []string{"after"}}}})
+	m = updated.(*Logs)
+
+	view := m.Body(120, 20)
+	if got := strings.Count(view, "while filtered"); got != 1 {
+		t.Errorf("the line appears %d times, want once:\n%s", got, view)
+	}
+}
+
+func TestLogsWrapsFromAnErrorOnTheLastLine(t *testing.T) {
+	// The error that matters is usually the last thing a failed build wrote,
+	// and the viewport cannot scroll it to the top — there are not enough
+	// rows below it. The offset it reports back is therefore not the row the
+	// jump asked for, which is what a wrap has to be decided from.
+	m := loadedLogs(t, longLog(10, 119))
+
+	m = pressLog(t, m, "n")
+	first := m.viewport.YOffset
+	m = pressLog(t, m, "n")
+	m = pressLog(t, m, "n")
+
+	if got := m.viewport.YOffset; got != first {
+		t.Errorf("offset = %d, want %d — the jump never came back round", got, first)
+	}
+}
+
+func TestLogsDigestFitsTheWidthItWasGiven(t *testing.T) {
+	// Root sizes the pane from lipgloss.Height, which counts newlines and
+	// cannot see a terminal wrapping a row too wide for it. A digest row over
+	// the width therefore costs rows nobody budgeted for, and pushes the help
+	// and status lines off the bottom.
+	m := failedLogs(t, []azdo.Record{
+		{Name: "Run a multi-line script inside a container job on a self-hosted pool", Type: "Task",
+			Result: "failed", Order: 1, LogID: 7, Issues: []azdo.Issue{
+				{Type: "error", Message: strings.Repeat("stack frame ", 30)},
+			}},
+		{Name: strings.Repeat("Publish ", 20), Type: "Task", Result: "failed", Order: 2, LogID: 8},
+	})
+
+	for _, row := range strings.Split(m.digestView(60, 30), "\n") {
+		if got := lipgloss.Width(row); got > 60 {
+			t.Errorf("digest row is %d columns wide in a 60 column pane: %q", got, row)
+		}
+	}
+}
+
+func TestLogsDigestCountsWhatItActuallyHid(t *testing.T) {
+	m := failedLogs(t, []azdo.Record{
+		{Name: "Test", Type: "Task", Result: "failed", Order: 1, LogID: 7, Issues: []azdo.Issue{
+			{Type: "error", Message: "one"},
+			{Type: "error", Message: "two"},
+			{Type: "error", Message: "three"},
+			{Type: "error", Message: "four"},
+		}},
+	})
+
+	// Five rows — the task and its four errors — into a pane with room for
+	// four, so three are kept and two are hidden behind the summary row.
+	got := m.digestView(120, 12)
+	if !strings.Contains(got, "+2 more") {
+		t.Errorf("digest = %q, want it to report the two rows it hid", got)
+	}
+}
+
+func TestLogsGivesAVeryShortPaneNoDigestAtAll(t *testing.T) {
+	m := failedLogs(t, []azdo.Record{
+		{Name: "Test", Type: "Task", Result: "failed", Order: 1, LogID: 7,
+			Issues: []azdo.Issue{{Type: "error", Message: "boom"}}},
+	})
+
+	if got := m.digestView(120, 2); got != "" {
+		t.Errorf("digest = %q, want none — there is no room for it and the log both", got)
+	}
+}
+
+func TestLogsKeepsThePlaceWhenTheFilterGoesOff(t *testing.T) {
+	// The second press of e is the whole point of the filter: you found the
+	// error, and now you want the output around it. Landing back at row 0 of
+	// a few thousand lines throws that away.
+	var at []int
+	for i := 0; i < 30; i++ {
+		at = append(at, i*4)
+	}
+	m := loadedLogs(t, longLog(at...))
+
+	m = pressLog(t, m, "e")
+	// The sixteenth error, which is the rule's two rows plus fifteen.
+	m.viewport.SetYOffset(17)
+	m = pressLog(t, m, "e")
+
+	// That error is the log's line 60, and the log starts under the rule's
+	// two rows.
+	if got := m.viewport.YOffset; got != 62 {
+		t.Errorf("offset = %d, want 62 — the error the reader was looking at", got)
+	}
+}
+
+func TestLogsKeepsThePlaceWhenTheFilterGoesOn(t *testing.T) {
+	var at []int
+	for i := 0; i < 30; i++ {
+		at = append(at, i*4)
+	}
+	m := loadedLogs(t, longLog(at...))
+	m.viewport.SetYOffset(60) // somewhere in the middle of the log
+
+	m = pressLog(t, m, "e")
+
+	// Filtered, the buffer is the task rule and the thirty errors. The line
+	// at row 60 is line 58, whose next error is the one on line 60 — the
+	// sixteenth, and so the rule's two rows plus fifteen.
+	if got := m.viewport.YOffset; got != 17 {
+		t.Errorf("offset = %d, want 17 — the first error at or after where the reader was", got)
+	}
+}
+
+func TestLogsWithholdsTheDigestWhileTheBuildIsStillRunning(t *testing.T) {
+	c := &azdo.Client{Org: "acme", Project: "Platform"}
+	build := azdo.Build{ID: 9001, Number: "1", Pipeline: "platform-ci", Status: azdo.StatusRunning}
+	// A task that has already failed under a build that has not finished: the
+	// run can still end up green, and calling it failed would be wrong.
+	m := NewLogs(c, build, []azdo.Record{
+		{Name: "Test", Type: "Task", Result: "failed", Order: 1, LogID: 7,
+			Issues: []azdo.Issue{{Type: "error", Message: "a retried step"}}},
+	})
+
+	if got := m.Body(120, 20); strings.Contains(got, "a retried step") {
+		t.Errorf("a running build was given a failure digest:\n%s", got)
+	}
+}
+
+func TestLogsShowsTheDigestForAPartiallySucceededBuild(t *testing.T) {
+	c := &azdo.Client{Org: "acme", Project: "Platform"}
+	build := azdo.Build{ID: 9001, Number: "1", Pipeline: "platform-ci", Status: azdo.StatusPartial}
+	m := NewLogs(c, build, []azdo.Record{
+		{Name: "Test", Type: "Task", Result: "failed", Order: 1, LogID: 7,
+			Issues: []azdo.Issue{{Type: "error", Message: "one suite broke"}}},
+	})
+
+	if got := m.Body(120, 20); !strings.Contains(got, "one suite broke") {
+		t.Errorf("a partially succeeded build hid what failed in it:\n%s", got)
+	}
+}
+
+func TestLogsJumpsWithinThePaneTheDigestLeft(t *testing.T) {
+	// The digest takes rows off the viewport, so an error the pane could
+	// scroll to the top without it may not be reachable with it.
+	m := failedLogs(t, []azdo.Record{
+		{Name: "Test", Type: "Task", Result: "failed", Order: 1, LogID: 7,
+			Issues: []azdo.Issue{{Type: "error", Message: "boom"}}},
+	})
+	updated, _ := m.Update(logChunksMsg{Status: azdo.StatusFailed,
+		Chunks: []azdo.LogChunk{{Task: "Test", LogID: 7, Lines: longLog(10, 119)}}})
+	m = updated.(*Logs)
+	m.Body(120, 12)
+	m.viewport.GotoTop()
+
+	m = pressLog(t, m, "n")
+	first := m.viewport.YOffset
+	m = pressLog(t, m, "n")
+	m = pressLog(t, m, "n")
+
+	if got := m.viewport.YOffset; got != first {
+		t.Errorf("offset = %d, want %d — the jump did not come back round under the digest", got, first)
 	}
 }

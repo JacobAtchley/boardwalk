@@ -362,12 +362,34 @@ links to.
 
 | key | |
 |---|---|
+| `n` | jump to the next error, wrapping at the end |
+| `e` | cut the pane down to its errors, and back |
 | `g` / `G` | top / bottom |
 | `t` | show / hide timestamps |
 | `r` | refresh |
 | `y` | copy the build id |
 | `o` | open the build in the browser |
 | `esc` / `q` | back to the build list |
+
+A failed build says why above its log: the tasks that failed, in the order they
+ran, each with the errors it reported. That comes off the build timeline rather
+than out of the log — it is what Azure DevOps puts on the run's summary page —
+so it is there before a line of the log has been read. It is pinned above the
+pane rather than written into it, since the log appends underneath while a
+build tails, and it gives up at six rows or a third of the pane, saying how
+many errors it left out. A task that failed without publishing a message is
+still named, with its log below.
+
+`n` then walks the log's own `##[error]` lines, putting each at the top of the
+pane, since what explains a failure is the output under it, and saying so when
+it comes back round to the first. `e` throws everything else away: the errors
+and the task headings that own them, and nothing that merely ran. A log with no
+errors at all is left alone rather than emptied, and says so.
+
+Both toggles keep your place. `e` puts the pane back on the line it was showing
+rather than on the row it was at — a row number means something else once most
+of the rows are gone — so filtering down to an error and back leaves you at
+that error, in its own output.
 
 A running build's logs append on their own every few seconds, and stop when the
 build finishes.
