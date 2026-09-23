@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // tailInterval is how often a running build's logs are re-read. Three seconds
@@ -284,13 +285,84 @@ func (m *Logs) rebuild() {
 	m.viewport.SetYOffset(offset)
 }
 
-// Body renders the viewport at the size Root has left for it.
+// digestRows is the most rows the failure digest may take: enough for a task
+// and a few of its errors, and never more than a third of the pane. The log is
+// what the reader came for — a digest that pushed it off the screen would have
+// answered "why did it fail" by hiding the evidence.
+const digestRows = 6
+
+// Body renders the digest and the viewport at the size Root has left for it.
+// The digest is pinned above rather than written into the log buffer: the
+// buffer is appended to every three seconds while a build tails, and a heading
+// inside it would scroll away from the reader the moment it mattered.
 func (m *Logs) Body(width, height int) string {
-	m.viewport.Width, m.viewport.Height = width, height
-	if m.text.Len() == 0 {
-		return chromeStyle.Render(m.work.View() + "fetching the build log…")
+	digest := m.digestView(width, height)
+	if digest != "" {
+		height = max(1, height-lipgloss.Height(digest))
 	}
-	return m.viewport.View()
+
+	m.viewport.Width, m.viewport.Height = width, height
+	body := m.viewport.View()
+	if m.text.Len() == 0 {
+		body = chromeStyle.Render(m.work.View() + "fetching the build log…")
+	}
+	if digest == "" {
+		return body
+	}
+	return digest + "\n" + body
+}
+
+// digestView is the account of what broke, read off the timeline rather than
+// out of the log: the failed tasks in execution order, each with the error
+// messages Azure DevOps itself puts on the run's summary page.
+//
+// It appears only once a build has actually failed. A running build has
+// nothing settled to report, and a succeeded one has nothing to report at all.
+func (m *Logs) digestView(width, height int) string {
+	if m.build.Status != azdo.StatusFailed && m.build.Status != azdo.StatusPartial {
+		return ""
+	}
+	failures := azdo.Failures(m.records)
+	if len(failures) == 0 {
+		return ""
+	}
+
+	rows := digestLines(failures, width)
+	// A third of the pane, so the digest stays a heading over the log rather
+	// than a second pane competing with it.
+	if room := min(digestRows, height/3); len(rows) > room {
+		hidden := len(rows) - room + 1
+		rows = append(rows[:max(0, room-1)], chromeStyle.Render(fmt.Sprintf("  +%d more — the log is below", hidden)))
+	}
+	return strings.Join(rows, "\n")
+}
+
+// digestLines renders one row per failed task and one per error under it. A
+// message is taken to its first line and cut to the width: Azure DevOps error
+// messages run to stack traces, and the digest is the summary that sends you
+// to the log, not a replacement for reading it.
+func digestLines(failures []azdo.Failure, width int) []string {
+	var rows []string
+	for _, f := range failures {
+		rows = append(rows, errStyle.Render("✗ "+f.Task))
+		if len(f.Errors) == 0 {
+			rows = append(rows, chromeStyle.Render("    no error message published — see its log below"))
+			continue
+		}
+		for _, e := range f.Errors {
+			rows = append(rows, "    "+truncate(firstLine(e), max(1, width-4)))
+		}
+	}
+	return rows
+}
+
+// firstLine is the head of a message that arrived with newlines in it, which a
+// pinned digest cannot show without pushing the log off the screen.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimRight(s[:i], "\r")
+	}
+	return s
 }
 
 // Title is the header line: pipeline, run number, live status and project.

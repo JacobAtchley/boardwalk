@@ -431,3 +431,84 @@ func TestQueueBuildReportsTheServersRefusal(t *testing.T) {
 		t.Errorf("error = %v, want the server's own message in it", err)
 	}
 }
+
+func TestFailuresNamesEachFailedTaskWithItsErrors(t *testing.T) {
+	records := []Record{
+		{Name: "Restore", Type: "Task", Result: "succeeded", Order: 1},
+		{Name: "Test", Type: "Task", Result: "failed", Order: 2, Issues: []Issue{
+			{Type: "warning", Message: "flaky"},
+			{Type: "error", Message: "TestThing failed"},
+			{Type: "error", Message: "TestOther failed"},
+		}},
+		{Name: "Job", Type: "Job", Result: "failed", Order: 2, Issues: []Issue{
+			{Type: "error", Message: "the job failed"},
+		}},
+	}
+
+	got := Failures(records)
+	if len(got) != 1 {
+		t.Fatalf("got %d failures, want only the failed task — a Job is the container it cascaded to", len(got))
+	}
+	if got[0].Task != "Test" {
+		t.Errorf("task = %q, want Test", got[0].Task)
+	}
+	want := []string{"TestThing failed", "TestOther failed"}
+	if len(got[0].Errors) != 2 || got[0].Errors[0] != want[0] || got[0].Errors[1] != want[1] {
+		t.Errorf("errors = %q, want %q — warnings are not why it failed", got[0].Errors, want)
+	}
+}
+
+func TestFailuresKeepsAFailedTaskThatPublishedNoIssue(t *testing.T) {
+	records := []Record{
+		{Name: "Publish", Type: "Task", Result: "failed", Order: 4},
+	}
+
+	got := Failures(records)
+	if len(got) != 1 || got[0].Task != "Publish" {
+		t.Fatalf("got %+v, want the task named even with nothing to quote", got)
+	}
+	if len(got[0].Errors) != 0 {
+		t.Errorf("errors = %q, want none", got[0].Errors)
+	}
+}
+
+func TestFailuresReadsInExecutionOrder(t *testing.T) {
+	records := []Record{
+		{Name: "Later", Type: "Task", Result: "failed", Order: 9},
+		{Name: "Earlier", Type: "Task", Result: "failed", Order: 2},
+	}
+
+	got := Failures(records)
+	if len(got) != 2 || got[0].Task != "Earlier" {
+		t.Errorf("got %+v, want the earlier task first", got)
+	}
+}
+
+func TestTimelineKeepsEachRecordsIssues(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/timeline") {
+			w.Write([]byte(`{"records":[
+			 {"name":"Test","type":"Task","state":"completed","result":"failed","order":1,"errorCount":1,"log":{"id":7},
+			  "issues":[{"type":"error","category":"General","message":"assert failed"},
+			            {"type":"warning","message":"slow"}]}
+			]}`))
+			return
+		}
+		w.Write([]byte(`{"id":9001,"buildNumber":"20260911.3","status":"completed","result":"failed"}`))
+	})
+
+	_, records, err := c.Timeline(9001)
+	if err != nil {
+		t.Fatalf("Timeline returned %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want 1", len(records))
+	}
+	got := records[0].Issues
+	if len(got) != 2 {
+		t.Fatalf("got %d issues, want both — the pane decides which to show", len(got))
+	}
+	if got[0].Type != "error" || got[0].Message != "assert failed" {
+		t.Errorf("issues[0] = %+v, want the error and its message", got[0])
+	}
+}

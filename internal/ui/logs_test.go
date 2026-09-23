@@ -7,6 +7,7 @@ import (
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func newLogs(t *testing.T, status azdo.BuildStatus) *Logs {
@@ -297,5 +298,95 @@ func TestLogsStripsTheAzureMarkers(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Errorf("the marker took %q with it:\n%s", want, view)
 		}
+	}
+}
+
+// failedLogs is a log pane over a failed build whose timeline says what broke.
+func failedLogs(t *testing.T, records []azdo.Record) *Logs {
+	t.Helper()
+	c := &azdo.Client{Org: "acme", Project: "Platform"}
+	build := azdo.Build{ID: 9001, Number: "20260911.3", Pipeline: "platform-ci", Status: azdo.StatusFailed}
+	m := NewLogs(c, build, records)
+	m.Body(120, 20)
+	return m
+}
+
+func TestLogsNamesWhyTheBuildFailedWithoutReadingTheLog(t *testing.T) {
+	m := failedLogs(t, []azdo.Record{
+		{Name: "Restore", Type: "Task", Result: "succeeded", Order: 1, LogID: 6},
+		{Name: "Test", Type: "Task", Result: "failed", Order: 2, LogID: 7, Issues: []azdo.Issue{
+			{Type: "error", Message: "TestThing: want 3, got 4"},
+		}},
+	})
+
+	view := m.Body(120, 20)
+	if !strings.Contains(view, "Test") || !strings.Contains(view, "TestThing: want 3, got 4") {
+		t.Errorf("the failing task and its error are not on screen:\n%s", view)
+	}
+}
+
+func TestLogsShowsNoDigestWhenTheBuildSucceeded(t *testing.T) {
+	c := &azdo.Client{Org: "acme", Project: "Platform"}
+	build := azdo.Build{ID: 9001, Number: "1", Pipeline: "platform-ci", Status: azdo.StatusSucceeded}
+	m := NewLogs(c, build, []azdo.Record{
+		{Name: "Test", Type: "Task", Result: "succeeded", Order: 1, LogID: 7,
+			Issues: []azdo.Issue{{Type: "warning", Message: "slow"}}},
+	})
+
+	if got := m.Body(120, 20); strings.Contains(got, "slow") {
+		t.Errorf("a succeeded build was given a failure digest:\n%s", got)
+	}
+}
+
+func TestLogsSaysAFailedTaskPublishedNothing(t *testing.T) {
+	m := failedLogs(t, []azdo.Record{{Name: "Publish", Type: "Task", Result: "failed", Order: 1, LogID: 7}})
+
+	view := m.Body(120, 20)
+	if !strings.Contains(view, "Publish") {
+		t.Errorf("the failing task is not named:\n%s", view)
+	}
+	if !strings.Contains(view, "no error message") {
+		t.Errorf("nothing says why there is nothing to quote:\n%s", view)
+	}
+}
+
+func TestLogsDigestIsCappedAndSaysWhatItLeftOut(t *testing.T) {
+	var issues []azdo.Issue
+	for i := 0; i < 20; i++ {
+		issues = append(issues, azdo.Issue{Type: "error", Message: fmt.Sprintf("error %d", i)})
+	}
+	m := failedLogs(t, []azdo.Record{
+		{Name: "Test", Type: "Task", Result: "failed", Order: 1, LogID: 7, Issues: issues},
+	})
+	m.Update(logChunksMsg{Status: azdo.StatusFailed,
+		Chunks: []azdo.LogChunk{{Task: "Test", LogID: 7, Lines: []string{"the log itself"}}}})
+
+	view := m.Body(120, 20)
+	if got := lipgloss.Height(view); got > 20 {
+		t.Errorf("body is %d rows in a 20 row pane:\n%s", got, view)
+	}
+	if !strings.Contains(view, "more") {
+		t.Errorf("the digest hid errors without saying so:\n%s", view)
+	}
+	if !strings.Contains(view, "the log itself") {
+		t.Errorf("the digest crowded the log off the screen:\n%s", view)
+	}
+}
+
+func TestLogsDigestFollowsABuildThatFailsWhileWatched(t *testing.T) {
+	c := &azdo.Client{Org: "acme", Project: "Platform"}
+	build := azdo.Build{ID: 9001, Number: "1", Pipeline: "platform-ci", Status: azdo.StatusRunning}
+	m := NewLogs(c, build, []azdo.Record{{Name: "Test", Type: "Task", Order: 1, LogID: 7}})
+	m.Body(120, 20)
+
+	updated, _ := m.Update(logChunksMsg{
+		Status: azdo.StatusFailed,
+		Records: []azdo.Record{{Name: "Test", Type: "Task", Result: "failed", Order: 1, LogID: 7,
+			Issues: []azdo.Issue{{Type: "error", Message: "it broke"}}}},
+	})
+	m = updated.(*Logs)
+
+	if got := m.Body(120, 20); !strings.Contains(got, "it broke") {
+		t.Errorf("the digest did not appear when the build failed under the pane:\n%s", got)
 	}
 }

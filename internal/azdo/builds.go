@@ -90,6 +90,14 @@ type Build struct {
 	Queued       time.Time
 }
 
+// Issue is one problem a timeline record reported: the message Azure DevOps
+// itself puts on a run's summary page, rather than a line somebody has to find
+// in the log.
+type Issue struct {
+	Type    string // "error" or "warning"
+	Message string
+}
+
 // Record is one entry in a build's timeline: a stage, a job, or a task.
 type Record struct {
 	Name       string
@@ -99,6 +107,47 @@ type Record struct {
 	Order      int
 	LogID      int
 	ErrorCount int
+	Issues     []Issue
+}
+
+// Failure is one failed task and the errors it reported, which together are
+// the answer to why a build failed.
+type Failure struct {
+	Task   string
+	Errors []string
+}
+
+// Failures reads the timeline as the account of what broke: every failed task
+// in execution order, each with the error messages it published. Containers
+// are left out for the reason summarize gives — Azure DevOps cascades a failed
+// task's result up through its job and stage, and reporting those repeats one
+// failure three times under names that did nothing.
+//
+// A task that failed without publishing an issue is still named. Its errors
+// are empty rather than invented; what it has to say is in its log, and
+// leaving it out would hide the failure entirely.
+func Failures(records []Record) []Failure {
+	failed := make([]Record, 0, len(records))
+	for _, r := range records {
+		if r.Type == "Task" && r.Result == "failed" {
+			failed = append(failed, r)
+		}
+	}
+	// The timeline arrives in no particular order, and a digest that reads
+	// out of order is a worse account than none.
+	sort.SliceStable(failed, func(i, j int) bool { return failed[i].Order < failed[j].Order })
+
+	out := make([]Failure, 0, len(failed))
+	for _, r := range failed {
+		f := Failure{Task: r.Name}
+		for _, issue := range r.Issues {
+			if issue.Type == "error" {
+				f.Errors = append(f.Errors, issue.Message)
+			}
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // Progress is what the build list shows beyond the status glyph.
@@ -236,6 +285,10 @@ func (c *Client) Timeline(buildID int) (Progress, []Record, error) {
 			Log        *struct {
 				ID int `json:"id"`
 			} `json:"log"`
+			Issues []struct {
+				Type    string `json:"type"`
+				Message string `json:"message"`
+			} `json:"issues"`
 		} `json:"records"`
 	}
 
@@ -257,6 +310,9 @@ func (c *Client) Timeline(buildID int) (Progress, []Record, error) {
 		}
 		if v.Log != nil {
 			r.LogID = v.Log.ID
+		}
+		for _, issue := range v.Issues {
+			r.Issues = append(r.Issues, Issue{Type: issue.Type, Message: issue.Message})
 		}
 		records = append(records, r)
 	}
