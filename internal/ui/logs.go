@@ -232,6 +232,9 @@ func (m *Logs) Update(msg tea.Msg) (View, tea.Cmd) {
 		case key.Matches(msg, keyNextError):
 			m.jumpToNextError()
 			return m, nil
+		case key.Matches(msg, keyWatch):
+			b := m.build
+			return m, func() tea.Msg { return WatchBuildMsg{Build: b} }
 		case key.Matches(msg, keyStamps):
 			m.showStamps = !m.showStamps
 			m.rebuild()
@@ -600,7 +603,7 @@ func (m *Logs) Title() string {
 // caught here because this one never overflowed. Copy-id and open are still
 // one press of "?" away in the panel's second column.
 func (m *Logs) Keys() help.KeyMap {
-	own := []key.Binding{keyTop, keyBottom, keyStamps}
+	own := []key.Binding{keyTop, keyBottom, keyStamps, keyWatch}
 	if m.build.Status.Done() {
 		own = append(own, keyRefresh)
 	}

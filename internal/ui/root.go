@@ -47,6 +47,11 @@ type Root struct {
 	// the user presses "?".
 	help help.Model
 
+	// watch is the builds waiting on a desktop notification. It lives here
+	// rather than on a view so a watch survives leaving the view it was
+	// started from.
+	watch *buildWatch
+
 	width, height int
 }
 
@@ -56,7 +61,7 @@ type Root struct {
 // on entry, so the menu paints before anything touches the network — and a
 // view reached from the menu loads its own data however boardwalk was started.
 func NewRoot(c *azdo.Client, mineOnly, includeClosed bool, start string) *Root {
-	r := &Root{client: c, mineOnly: mineOnly, includeClosed: includeClosed, help: newHelp()}
+	r := &Root{client: c, mineOnly: mineOnly, includeClosed: includeClosed, help: newHelp(), watch: newBuildWatch(c)}
 	if start != "" {
 		if v := r.build(start); v != nil {
 			r.stack = append(r.stack, v)
@@ -123,6 +128,17 @@ func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			r.stack = r.stack[:len(r.stack)-1]
 		}
 		return r, nil
+
+	case WatchBuildMsg:
+		status, cmd := r.watch.toggle(msg.Build)
+		return r, tea.Batch(statusCmd(status), cmd)
+
+	case buildWatchTickMsg:
+		return r, r.watch.poll()
+
+	case buildWatchResultMsg:
+		status, cmd := r.watch.apply(msg)
+		return r, tea.Batch(statusCmd(status), cmd)
 
 	case tea.KeyMsg:
 		if cmd, handled := r.key(msg); handled {
@@ -267,6 +283,11 @@ func (r *Root) View() string {
 	helpView := r.help.View(top.Keys())
 	body := top.Body(r.width, max(1, r.height-lipgloss.Height(helpView)-2))
 
+	title := top.Title()
+	if n := len(r.watch.watched); n > 0 {
+		title += fmt.Sprintf(" · watching %d", n)
+	}
+
 	status, isErr := top.Status()
 	style := statusStyle
 	if isErr {
@@ -274,7 +295,7 @@ func (r *Root) View() string {
 	}
 
 	return strings.Join([]string{
-		chromeStyle.Render(top.Title()),
+		chromeStyle.Render(title),
 		body,
 		helpView,
 		style.Render(truncate(status, r.width)),
@@ -298,4 +319,13 @@ func (r *Root) menuView() string {
 	fmt.Fprintf(&b, "\n%s\n", chromeStyle.Render(
 		fmt.Sprintf("%s/%s · ↑↓ move · enter open · q quit", r.client.Org, r.client.Project)))
 	return b.String()
+}
+
+// statusCmd delivers a status line to the view on top, or nothing when there
+// is no text to show.
+func statusCmd(s StatusMsg) tea.Cmd {
+	if s.Text == "" {
+		return nil
+	}
+	return func() tea.Msg { return s }
 }
