@@ -108,6 +108,13 @@ var (
 	keyQueue       = key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "new run"))
 	keyCancelBuild = key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "cancel run"))
 
+	// keyWatch asks for a desktop notification when a build finishes, and
+	// asks again to stop. "a" for alert: n is the log pane's next error, and
+	// the log pane is what the build list opens — keyDiff's trap — while a is
+	// free on the build list, the log pane and the pull request pane p opens.
+	// It is lower case because it changes nothing anyone else sees.
+	keyWatch = key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "alert when done"))
+
 	// keyFileDiff toggles the change marks in the file view off, leaving the
 	// file and its highlighting. "d" is the drafts filter on the pull request
 	// list, which is two views further up — keyDiff's objection is to a key

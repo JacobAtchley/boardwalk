@@ -495,6 +495,13 @@ func (m *Builds) Update(msg tea.Msg) (View, tea.Cmd) {
 			m.status, m.failed = "looking for the pull request…", false
 			return m, tea.Batch(m.fetchPullRequestLink(r.Build), m.work.begin(1))
 
+		case keyWatch.Help().Key:
+			r, ok := row.(buildRow)
+			if !hasRow || !ok {
+				return m, nil
+			}
+			return m, func() tea.Msg { return WatchBuildMsg{Build: r.Build} }
+
 		case "r":
 			m.status, m.failed = "refreshing…", false
 			return m, m.refresh()
@@ -672,7 +679,7 @@ func (m *Builds) Keys() help.KeyMap {
 	// and ? off the end of it at ordinary widths, which is the defect
 	// TestEveryViewsShortHelpSurvivesOrdinaryWidths exists to catch.
 	short := []key.Binding{keyLogs, keyLinkedPR}
-	full := []key.Binding{keyLogs, keyLinkedPR, keyRerun, keyQueue, keyCancelBuild}
+	full := []key.Binding{keyLogs, keyLinkedPR, keyWatch, keyRerun, keyQueue, keyCancelBuild}
 	return listKeys(short, full...)
 }
 

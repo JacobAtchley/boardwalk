@@ -343,6 +343,7 @@ up without restarting.
 |---|---|
 | `enter` | open the logs |
 | `p` | the pull request this run built |
+| `a` | send a desktop notification when this run finishes — press again to stop |
 | `Q` | re-run — this pipeline, this branch |
 | `N` | new run — asks which branch |
 | `C` | cancel a run that has not finished |
@@ -358,6 +359,12 @@ Capitals because the lower-case letters are taken in views reachable from
 here: `r` refreshes everywhere, `c` replies on a pull request the build list
 links to.
 
+A watched run is checked every twenty seconds for as long as boardwalk is
+open, wherever you have gone since, and the header counts how many are being
+watched. The notification says how it ended and, for a failure, the first task
+that failed. On macOS it goes through `terminal-notifier` if installed, else
+`osascript`; on Linux through `notify-send`.
+
 ### Logs
 
 | key | |
@@ -366,6 +373,7 @@ links to.
 | `e` | cut the pane down to its errors, and back |
 | `g` / `G` | top / bottom |
 | `t` | show / hide timestamps |
+| `a` | send a desktop notification when the build finishes — press again to stop |
 | `r` | refresh |
 | `y` | copy the build id |
 | `o` | open the build in the browser |
