@@ -69,6 +69,7 @@ Everything boardwalk needs to know lives in one file at
 | `org` | the Azure DevOps organisation — the first path segment of `https://dev.azure.com/{org}` |
 | `project` | the team project within it |
 | `reviewGroups` | optional — extra teams and security groups to treat as yours, named as Azure DevOps displays them |
+| `paletteKey` | optional — the key that opens the [command palette](#command-palette), spelled `ctrl+k`, `:`, `f1`; defaults to `ctrl+p` |
 
 Azure DevOps scopes a group's display name to wherever it lives —
 `[TEAM FOUNDATION]\platform-devs` for a collection group, `[MyProject]\Team
@@ -135,6 +136,27 @@ misreading, since the flag package stops at the first non-flag word.
 Every view fetches when it is opened, so the menu paints immediately and a
 fetch that fails lands on the status line with `r` to try again, rather than
 taking the program down with it.
+
+### Command palette
+
+`^p` opens a searchable list of everything the current screen can do. Type to
+fuzzy-filter it, `↑`/`↓` (or `^j`/`^k`) to move, `enter` to run,
+`esc` or the palette key again to close. Each entry shows the key it stands for, so the palette doubles
+as a way to learn them.
+
+- **Actions** are the same bindings the `?` panel lists, and running one does
+  exactly what pressing its key does — the two cannot disagree.
+- **go to work items / pull requests / builds** is offered from anywhere. If
+  that view is already underneath, boardwalk returns to it as you left it;
+  otherwise it opens fresh.
+- **Recent** entries come first. They are remembered beside the config, in
+  `~/.config/boardwalk.history.json`, so each config keeps its own.
+
+The key is `paletteKey` in the config. boardwalk refuses a key it does not
+recognise, or one it needs itself (`esc`, `q`, `?`, `enter`, `^c`, and the
+menu's `↑`/`↓`/`j`/`k`), at startup. A key a view also binds is taken by the
+palette on that view, so pick one that is free. Like every other key, it is left to a
+prompt while one is open.
 
 ### Every list view
 

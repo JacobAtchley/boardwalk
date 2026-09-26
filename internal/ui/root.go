@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/JacobAtchley/boardwalk/internal/history"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -43,6 +44,16 @@ type Root struct {
 	stack  []View
 	choice int
 
+	// base is the menu key of the view at the bottom of the stack, so a
+	// palette "go to" can tell whether that view is already open.
+	base string
+
+	// palette is the open command palette, or nil. paletteKey opens it, and
+	// history is what it has run before.
+	palette    *Palette
+	paletteKey key.Binding
+	history    History
+
 	// help renders a view's bindings: one line by default, every group when
 	// the user presses "?".
 	help help.Model
@@ -55,11 +66,19 @@ type Root struct {
 // the menu is the first thing shown. No data comes in here: every view fetches
 // on entry, so the menu paints before anything touches the network — and a
 // view reached from the menu loads its own data however boardwalk was started.
-func NewRoot(c *azdo.Client, mineOnly, includeClosed bool, start string) *Root {
-	r := &Root{client: c, mineOnly: mineOnly, includeClosed: includeClosed, help: newHelp()}
+func NewRoot(c *azdo.Client, mineOnly, includeClosed bool, start string, opts ...RootOption) *Root {
+	r := &Root{
+		client: c, mineOnly: mineOnly, includeClosed: includeClosed, help: newHelp(),
+		paletteKey: paletteBinding(DefaultPaletteKey),
+		history:    history.Open("", HistoryLimit),
+	}
+	for _, opt := range opts {
+		opt(r)
+	}
 	if start != "" {
 		if v := r.build(start); v != nil {
 			r.stack = append(r.stack, v)
+			r.base = start
 		}
 	}
 	return r
@@ -124,6 +143,9 @@ func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return r, nil
 
+	case goToMsg:
+		return r, r.goTo(msg.name)
+
 	case tea.KeyMsg:
 		if cmd, handled := r.key(msg); handled {
 			return r, cmd
@@ -181,9 +203,17 @@ func topOnly(msg tea.Msg) bool {
 // on top, and nothing is intercepted while a view has a text prompt open —
 // which is why the view is asked for its status first.
 func (r *Root) key(msg tea.KeyMsg) (tea.Cmd, bool) {
+	if r.palette != nil {
+		return r.paletteKeyPress(msg), true
+	}
+
 	top, hasView := r.top()
 
 	if !hasView {
+		if key.Matches(msg, r.paletteKey) {
+			r.openPalette()
+			return nil, true
+		}
 		switch msg.String() {
 		case "up", "k":
 			r.choice = (r.choice - 1 + len(menuEntries)) % len(menuEntries)
@@ -197,6 +227,7 @@ func (r *Root) key(msg tea.KeyMsg) (tea.Cmd, bool) {
 				return nil, true
 			}
 			r.stack = append(r.stack, v)
+			r.base = menuEntries[r.choice].key
 			return initialise(v), true
 		case "q", "esc", "ctrl+c":
 			return tea.Quit, true
@@ -220,6 +251,11 @@ func (r *Root) key(msg tea.KeyMsg) (tea.Cmd, bool) {
 
 	if key.Matches(msg, keyHelp) {
 		r.help.ShowAll = !r.help.ShowAll
+		return nil, true
+	}
+
+	if key.Matches(msg, r.paletteKey) {
+		r.openPalette()
 		return nil, true
 	}
 
@@ -257,14 +293,22 @@ func (r *Root) View() string {
 
 	top, ok := r.top()
 	if !ok {
+		if r.palette != nil {
+			return lipgloss.Place(r.width, r.height, lipgloss.Center, lipgloss.Top,
+				r.palette.View(r.width, r.height, "menu"))
+		}
 		return r.menuView()
+	}
+
+	if r.palette != nil {
+		return r.paletteFrame(top)
 	}
 
 	// The help panel is one line closed and several open, so the body is sized
 	// from what it actually renders rather than from a constant. The title and
 	// the status line are one row each.
 	r.help.Width = r.width
-	helpView := r.help.View(top.Keys())
+	helpView := r.help.View(withPalette(top.Keys(), r.paletteKey))
 	body := top.Body(r.width, max(1, r.height-lipgloss.Height(helpView)-2))
 
 	status, isErr := top.Status()
@@ -296,6 +340,7 @@ func (r *Root) menuView() string {
 	}
 
 	fmt.Fprintf(&b, "\n%s\n", chromeStyle.Render(
-		fmt.Sprintf("%s/%s · ↑↓ move · enter open · q quit", r.client.Org, r.client.Project)))
+		fmt.Sprintf("%s/%s · ↑↓ move · enter open · %s commands · q quit",
+			r.client.Org, r.client.Project, r.paletteKey.Help().Key)))
 	return b.String()
 }

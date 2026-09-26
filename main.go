@@ -25,6 +25,7 @@ import (
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
 	"github.com/JacobAtchley/boardwalk/internal/config"
+	"github.com/JacobAtchley/boardwalk/internal/history"
 	"github.com/JacobAtchley/boardwalk/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -139,6 +140,26 @@ func loadConfig() (config.Config, error) {
 	return cfg, nil
 }
 
+// rootOptions turns the palette settings into options for the TUI: the key
+// that opens it, checked here so a typo is reported at startup rather than
+// as a key that silently does nothing, and where its history is kept.
+func rootOptions(cfg config.Config) ([]ui.RootOption, error) {
+	var opts []ui.RootOption
+	if cfg.PaletteKey != "" {
+		if err := ui.CheckPaletteKey(cfg.PaletteKey); err != nil {
+			path, _ := config.Path()
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		opts = append(opts, ui.WithPaletteKey(cfg.PaletteKey))
+	}
+	// No history path means no home directory to put it in; the palette
+	// then remembers for this session only, which is the default.
+	if path, err := config.HistoryPath(); err == nil {
+		opts = append(opts, ui.WithHistory(history.Open(path, ui.HistoryLimit)))
+	}
+	return opts, nil
+}
+
 func indent(s string) string {
 	return "    " + strings.ReplaceAll(s, "\n", "\n    ")
 }
@@ -183,7 +204,11 @@ func run(start string, mineOnly, all, dump, timing bool) error {
 		return nil
 	}
 
-	root := ui.NewRoot(client, mineOnly, all, start)
+	opts, err := rootOptions(cfg)
+	if err != nil {
+		return err
+	}
+	root := ui.NewRoot(client, mineOnly, all, start, opts...)
 	_, err = tea.NewProgram(root, tea.WithAltScreen()).Run()
 	return err
 }

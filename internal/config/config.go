@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // EnvPath overrides where the config is read from, for keeping more than one —
@@ -41,6 +42,10 @@ type Config struct {
 	// offline; the price is the one it always had, that it goes stale when
 	// your memberships change.
 	ReviewGroups []string `json:"reviewGroups"`
+
+	// PaletteKey opens the command palette, spelled the way bubbletea names
+	// keys: "ctrl+p", "ctrl+k", ":". Empty means the default, ctrl+p.
+	PaletteKey string `json:"paletteKey,omitempty"`
 }
 
 // ErrMissing is returned when there is no config file at all, so a caller can
@@ -89,6 +94,16 @@ func Path() (string, error) {
 		return "", fmt.Errorf("could not find a home directory: %w", err)
 	}
 	return filepath.Join(home, ".config", "boardwalk.json"), nil
+}
+
+// HistoryPath is where the command palette remembers what it ran: beside the
+// config, named after it, so a second config keeps a history of its own.
+func HistoryPath() (string, error) {
+	path, err := Path()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(path, filepath.Ext(path)) + ".history.json", nil
 }
 
 // Validate reports what is missing, naming the file so the message says where

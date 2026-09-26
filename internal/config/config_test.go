@@ -21,7 +21,8 @@ func TestLoadReadsEverySetting(t *testing.T) {
 	t.Setenv(EnvPath, writeConfig(t, `{
 		"org": "acme",
 		"project": "Platform",
-		"reviewGroups": ["platform-devs", "Platform Leads"]
+		"reviewGroups": ["platform-devs", "Platform Leads"],
+		"paletteKey": "ctrl+k"
 	}`))
 
 	c, err := Load()
@@ -33,6 +34,24 @@ func TestLoadReadsEverySetting(t *testing.T) {
 	}
 	if len(c.ReviewGroups) != 2 || c.ReviewGroups[0] != "platform-devs" {
 		t.Errorf("groups = %v", c.ReviewGroups)
+	}
+	if c.PaletteKey != "ctrl+k" {
+		t.Errorf("paletteKey = %q", c.PaletteKey)
+	}
+}
+
+func TestHistoryPathSitsBesideTheConfig(t *testing.T) {
+	// Each config keeps its own history, so a second organisation's recent
+	// actions do not crowd out the first's.
+	for cfg, want := range map[string]string{
+		"/home/me/.config/boardwalk.json":       "/home/me/.config/boardwalk.history.json",
+		"/home/me/.config/boardwalk.other.json": "/home/me/.config/boardwalk.other.history.json",
+		"/etc/boardwalk":                        "/etc/boardwalk.history.json",
+	} {
+		t.Setenv(EnvPath, cfg)
+		if got, err := HistoryPath(); err != nil || got != want {
+			t.Errorf("HistoryPath() for %s = %q, %v; want %q", cfg, got, err, want)
+		}
 	}
 }
 
