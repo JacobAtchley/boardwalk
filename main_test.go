@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/JacobAtchley/boardwalk/internal/config"
+)
 
 func TestParseArgs(t *testing.T) {
 	for _, tc := range []struct {
@@ -97,5 +101,19 @@ func TestStatusIsASubcommand(t *testing.T) {
 	}
 	if f.start != "status" {
 		t.Errorf("start = %q, want the session view", f.start)
+	}
+}
+
+func TestRootOptionsRejectsAPaletteKeyItCannotUse(t *testing.T) {
+	t.Setenv("BOARDWALK_CONFIG", t.TempDir()+"/boardwalk.json")
+	if _, err := rootOptions(config.Config{PaletteKey: "ctrl+banana"}); err == nil {
+		t.Error("an unknown palette key was accepted")
+	}
+	opts, err := rootOptions(config.Config{PaletteKey: "ctrl+k"})
+	if err != nil || len(opts) != 2 {
+		t.Errorf("rootOptions = %d options, %v; want the key and the history", len(opts), err)
+	}
+	if opts, _ := rootOptions(config.Config{}); len(opts) != 1 {
+		t.Errorf("an unset key gave %d options, want only the history", len(opts))
 	}
 }
