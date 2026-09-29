@@ -35,8 +35,8 @@ const (
 
 // armedBuild is an action waiting on its confirming keystroke. It captures
 // everything the confirm needs, because the list underneath can be rebuilt by
-// a refresh landing while the arm is up — the same reason repoPicker captures
-// its work item and branch.
+// a refresh landing while the arm is up — the same reason the create branch
+// screen captures its work item.
 type armedBuild struct {
 	action buildAction
 	// buildID is the run to cancel; definitionID and branch are what a

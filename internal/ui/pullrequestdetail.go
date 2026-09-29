@@ -548,7 +548,7 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 		// The reply prompt owns every key while it is open, including esc and
 		// the letters that are otherwise actions — typing "o" into it must add
 		// the letter, not open a browser. Mirrors the branch prompt in
-		// workitems.go.
+		// builds.go.
 		if m.replyPrompt != nil {
 			switch msg.Type {
 			case tea.KeyEsc:
@@ -881,7 +881,7 @@ func (m *PullRequestDetail) Keys() help.KeyMap {
 }
 
 // Status shows the reply prompt in place of the transient line while it is
-// open, the same swap the branch prompt makes in workitems.go.
+// open, the same swap the branch prompt makes in builds.go.
 func (m *PullRequestDetail) Status() (string, bool) {
 	if m.replyPrompt != nil {
 		return m.replyPrompt.View(), false

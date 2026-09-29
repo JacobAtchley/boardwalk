@@ -148,7 +148,7 @@ func TestRootPaletteKeyIsConfigurable(t *testing.T) {
 
 func TestRootLeavesThePaletteKeyToAnOpenPrompt(t *testing.T) {
 	for name, open := range openPrompt {
-		r, _ := send(t, newRoot(t, "items"), open, ctrlP)
+		r, _ := send(t, open(t, newRoot(t, "items")), ctrlP)
 		if r.palette != nil {
 			t.Errorf("the palette opened over %s", name)
 		}

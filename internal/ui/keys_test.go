@@ -113,6 +113,7 @@ func viewKeyMaps(t *testing.T) map[string]help.KeyMap {
 		"pull request detail": newPRDetail(t, nil).Keys(),
 		"item":                newItem(t, nil).Keys(),
 		"pull request diff":   newPRDiff(t).view.Keys(),
+		"create branch":       NewCreateBranch(itemsClient, items[0], func() string { return "" }, nil).Keys(),
 	}
 }
 

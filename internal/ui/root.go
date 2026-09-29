@@ -236,7 +236,7 @@ func (r *Root) key(msg tea.KeyMsg) (tea.Cmd, bool) {
 	}
 
 	// ctrl+c is above the typing guard on purpose. bubbletea does not quit on
-	// it by itself — the model has to — and the branch prompt is a bare
+	// it by itself — the model has to — and a text prompt is a bare
 	// textinput that does not bind it, so yielding it to the view left the
 	// universal terminal interrupt doing nothing at all.
 	if msg.String() == "ctrl+c" {
@@ -275,7 +275,7 @@ func (r *Root) key(msg tea.KeyMsg) (tea.Cmd, bool) {
 }
 
 // typing reports whether the view on top has a prompt open — the fuzzy filter
-// or the branch name editor — in which case Root must not claim esc or q.
+// or a text field such as a branch name — in which case Root must not claim esc or q.
 func typing(v View) bool {
 	type prompter interface{ Prompting() bool }
 	if p, ok := v.(prompter); ok {

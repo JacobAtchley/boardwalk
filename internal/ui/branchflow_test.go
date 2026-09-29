@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 var errTest = errors.New("the server said no")
@@ -78,50 +77,6 @@ func TestPickRepo(t *testing.T) {
 	}
 }
 
-func TestBranchPromptOpensPrefilledAndIsEditable(t *testing.T) {
-	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false, false))
-
-	m, _ = press(t, m, runes("b"))
-	if m.branchPrompt == nil {
-		t.Fatal("b did not open the branch prompt")
-	}
-	if got := m.branchPrompt.Value(); got != "feature/4021-retry-webhook-delivery-on-5xx" {
-		t.Fatalf("prompt = %q, want it prefilled with the generated name", got)
-	}
-
-	m, _ = press(t, m, tea.KeyMsg{Type: tea.KeyBackspace})
-	if strings.HasSuffix(m.branchPrompt.Value(), "5xx") {
-		t.Error("the prompt did not take the edit")
-	}
-}
-
-func TestBranchPromptEscapeCancels(t *testing.T) {
-	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false, false))
-
-	m, _ = press(t, m, runes("b"))
-	m, cmd := press(t, m, tea.KeyMsg{Type: tea.KeyEsc})
-	if cmd != nil {
-		t.Error("cancelling the prompt started work anyway")
-	}
-	if m.branchPrompt != nil {
-		t.Error("escape did not close the prompt")
-	}
-}
-
-func TestBranchPromptSwallowsActionKeys(t *testing.T) {
-	// With the prompt open, "o" is a letter rather than the open action.
-	c, items := fixture()
-	m := sized(t, NewWorkItems(c, items, false, false))
-
-	m, _ = press(t, m, runes("b"))
-	m, _ = press(t, m, runes("o"))
-	if !strings.HasSuffix(m.branchPrompt.Value(), "o") {
-		t.Errorf("prompt = %q, want the keystroke in it", m.branchPrompt.Value())
-	}
-}
-
 func TestBranchDoneReportsEveryStep(t *testing.T) {
 	// #4020 starts life as "Needs Refinement" in the fixture, so a row
 	// picking up Active is evidence of the sync rather than a coincidence.
@@ -129,7 +84,7 @@ func TestBranchDoneReportsEveryStep(t *testing.T) {
 	m := sized(t, NewWorkItems(c, items, false, false))
 	copied := captureClipboard(t, nil)
 
-	updated, cmd := m.Update(branchDoneMsg{BranchResult{
+	updated, cmd := m.Update(branchDoneMsg{Owner: m, BranchResult: BranchResult{
 		Branch:    "feature/4020-tidy",
 		ID:        4020,
 		Steps:     []string{"created feature/4020-tidy", "set #4020 Active", "linked the branch"},
@@ -170,7 +125,7 @@ func TestBranchDoneKeepsTheStepsThatSucceeded(t *testing.T) {
 	m := sized(t, NewWorkItems(c, items, false, false))
 	copied := captureClipboard(t, nil)
 
-	updated, cmd := m.Update(branchDoneMsg{BranchResult{
+	updated, cmd := m.Update(branchDoneMsg{Owner: m, BranchResult: BranchResult{
 		Branch:    "feature/4020-tidy",
 		ID:        4020,
 		Steps:     []string{"created feature/4020-tidy", "set #4020 Active"},
@@ -210,7 +165,7 @@ func TestBranchDoneLeavesTheRowAloneWhenActivationNeverHappened(t *testing.T) {
 	before := rowLine(t, m, 4020)
 	copied := captureClipboard(t, nil)
 
-	updated, _ := m.Update(branchDoneMsg{BranchResult{
+	updated, _ := m.Update(branchDoneMsg{Owner: m, BranchResult: BranchResult{
 		Branch: "feature/4020-tidy",
 		ID:     4020,
 		Err:    errTest,
@@ -233,7 +188,7 @@ func TestBranchDoneShowsTheCommandWhenTheClipboardRefuses(t *testing.T) {
 	m := sized(t, NewWorkItems(c, items, false, false))
 	captureClipboard(t, errTest)
 
-	updated, _ := m.Update(branchDoneMsg{BranchResult{
+	updated, _ := m.Update(branchDoneMsg{Owner: m, BranchResult: BranchResult{
 		Branch:  "feature/4020-tidy",
 		ID:      4020,
 		Steps:   []string{"created feature/4020-tidy"},
