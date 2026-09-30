@@ -78,7 +78,7 @@ func NewStatus(c *azdo.Client, s azdo.Session) *Status {
 // Init lists the project's repositories, which is the one thing on this
 // screen that is not already in hand.
 func (m *Status) Init() tea.Cmd {
-	return tea.Batch(reposCmd(m.client, 0, ""), m.work.begin(1))
+	return tea.Batch(reposCmd(m.client, 0), m.work.begin(1))
 }
 
 // resolveCmd re-runs the startup lookups off the UI goroutine.
@@ -109,7 +109,7 @@ func (m *Status) Update(msg tea.Msg) (View, tea.Cmd) {
 			return m, func() tea.Msg { return PopMsg{} }
 		case key.Matches(msg, keyRefresh):
 			m.status, m.failed = "resolving…", false
-			return m, tea.Batch(resolveSessionCmd(m.client), reposCmd(m.client, 0, ""))
+			return m, tea.Batch(resolveSessionCmd(m.client), reposCmd(m.client, 0))
 		case key.Matches(msg, keyTop):
 			m.viewport.GotoTop()
 			return m, nil

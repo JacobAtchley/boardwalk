@@ -145,7 +145,7 @@ func (m *FileView) Update(msg tea.Msg) (View, tea.Cmd) {
 	case tea.KeyMsg:
 		// The prompt owns every key while it is open, including the letters
 		// that are otherwise actions. Mirrors the branch prompt in
-		// workitems.go and the reply prompt in pullrequestdetail.go.
+		// builds.go and the reply prompt in pullrequestdetail.go.
 		if m.commentPrompt != nil {
 			switch msg.Type {
 			case tea.KeyEsc:

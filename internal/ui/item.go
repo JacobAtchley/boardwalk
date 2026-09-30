@@ -82,7 +82,7 @@ type Item struct {
 
 	// statePicker is non-nil while the state picker is open. See the type's
 	// own doc in statepicker.go; it holds the same modal discipline the
-	// branch prompt in workitems.go and the reply prompt in
+	// branch prompt in builds.go and the reply prompt in
 	// pullrequestdetail.go use for theirs.
 	statePicker *statePicker
 	// stateErr is set when the last state-change status was a rejected
@@ -105,6 +105,10 @@ type Item struct {
 	// reusing failed, which render reads specifically for "the discussion did
 	// not load".
 	commentErr bool
+
+	// currentRepo is azdo.CurrentRepo, a field for the same reason as
+	// WorkItems's: a test says where it is standing.
+	currentRepo func() string
 }
 
 // NewItem builds the view. comments is whatever the list already had cached,
@@ -118,6 +122,8 @@ func NewItem(c *azdo.Client, wi azdo.WorkItem, comments []azdo.Comment) *Item {
 		loaded:   comments != nil,
 		work:     newWork(),
 		now:      time.Now,
+
+		currentRepo: azdo.CurrentRepo,
 	}
 }
 
@@ -241,6 +247,25 @@ func (m *Item) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.statePicker.resolve(msg)
 		return m, nil
 
+	case branchStartedMsg:
+		if msg.Owner == View(m) {
+			m.status, m.stateErr = branchStartedStatus(msg), false
+		}
+		return m, nil
+
+	case branchDoneMsg:
+		if msg.ID != m.item.ID {
+			return m, nil
+		}
+		if msg.Activated {
+			m.item.State = "Active"
+			m.invalidate()
+		}
+		if msg.Owner == View(m) {
+			m.status, m.stateErr = branchReport(msg.BranchResult)
+		}
+		return m, nil
+
 	case stateSetMsg:
 		if msg.ID != m.item.ID {
 			return m, nil
@@ -315,7 +340,7 @@ func (m *Item) Update(msg tea.Msg) (View, tea.Cmd) {
 		}
 
 		// The state picker owns every key while it is open, the same
-		// discipline the branch prompt (workitems.go) and the reply prompt
+		// discipline the branch prompt (builds.go) and the reply prompt
 		// (pullrequestdetail.go) use for theirs.
 		if m.statePicker != nil {
 			switch msg.String() {
@@ -352,6 +377,9 @@ func (m *Item) Update(msg tea.Msg) (View, tea.Cmd) {
 			m.loaded, m.failed = false, false
 			m.linkedLoaded, m.linkedErr = false, false
 			return m, m.Init()
+		case key.Matches(msg, keyBranch):
+			screen := NewCreateBranch(m.client, m.item, m.currentRepo, m)
+			return m, func() tea.Msg { return PushMsg{View: screen} }
 		case key.Matches(msg, keyState):
 			m.statePicker = newStatePicker(m.item.ID)
 			return m, statesCmd(m.client, m.item.ID, m.item.Type)
@@ -500,7 +528,7 @@ func (m *Item) Title() string {
 // four view-specific bindings alone still overflowed 80 columns.
 func (m *Item) Keys() help.KeyMap {
 	short := []key.Binding{keyComment, keyState, keyAssign}
-	full := []key.Binding{keyComment, keyState, keyAssign, keyLinkedPR, keyTop, keyBottom, keyRefresh}
+	full := []key.Binding{keyComment, keyState, keyAssign, keyBranch, keyLinkedPR, keyTop, keyBottom, keyRefresh}
 	return keyMap{
 		short:  append(append([]key.Binding{}, short...), keyBack, keyHelp),
 		groups: [][]key.Binding{full, {keyCopyID, keySlack, keyOpen}, navBindings()},

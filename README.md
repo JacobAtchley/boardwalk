@@ -201,14 +201,15 @@ list that reads as a fetch that broke:
 | `enter` | open the full item |
 | `^t` | toggle between everyone's items and yours |
 | `a` | set the item Active |
-| `b` | create a branch, set the item Active, link the branch to it, and copy the checkout |
+| `b` | open the new branch screen: create a branch from any branch, set the item Active, link the branch to it, and copy the checkout |
 
 The side pane is a summary — id, title, assignee, tags and iteration — so it
 stays readable while the cursor moves. `enter` opens the item itself: every
 field, the pull requests it is linked to, and the whole discussion, with the
 description, acceptance criteria and comments rendered as markdown rather than
 flattened to prose. `p` opens the first of those pull requests, and they are
-listed newest first.
+listed newest first. `b` works there too, and opens the same new branch screen for the
+item you are reading.
 
 ### Pull requests
 
@@ -425,9 +426,24 @@ on every row — and `t` brings it back when you are timing something.
 
 ## The branch flow
 
-`b` on a work item does the whole thing against the REST API — creates the
-branch off the repository's default branch, moves the item to Active, and links
-the branch to the item — then puts the checkout on your clipboard:
+`b` on a work item — on the list, or on the item itself — opens the new
+branch screen, which asks three things:
+
+- **repository** — the one you are standing in, when boardwalk can tell:
+  it reads the `origin` remote and matches it against the project's
+  repositories. Anywhere else — outside a checkout, or in a repository
+  belonging to somewhere else — it starts on the first, and `j` and `k` move.
+- **name** — prefilled from the item's type, id and title, and editable.
+- **from** — the branch to create it from, filtered as you type. The cursor
+  starts on the repository's default branch, so for the common case there is
+  nothing to change; for a branch off a feature or hotfix line, type part of
+  its name and `↑`/`↓` to it.
+
+`tab` and `shift+tab` move between them, `enter` creates, and `esc` goes back
+without doing anything. On `enter` boardwalk does the whole thing against the
+REST API — creates the branch from the chosen source, moves the item to Active,
+and links the branch to the item — then goes back to where you pressed `b` and puts the
+checkout on your clipboard:
 
 ```
 git fetch origin && git checkout feature/4021-retry-webhook-delivery-on-5xx && git pull
@@ -442,12 +458,6 @@ The command is copied as soon as the branch exists on the server, even if the
 state change or the link then fails, since the branch is there either way. If
 the clipboard command is missing or refuses, the command goes on the status
 line to be read off instead.
-
-The repository is usually the one you are standing in: boardwalk reads the
-`origin` remote and matches it against the project's repositories. Run it
-somewhere else — outside a checkout, or in a repository belonging to somewhere
-else — and it asks instead, one repository at a time on the status line, `j`
-and `k` to move and `enter` to pick.
 
 ## Notes from building it
 
@@ -512,9 +522,6 @@ Known rough edges, none of them load-bearing:
 - A build row whose timeline fetch failed retries every few seconds for as long
   as a log pane is tailing, because the hidden build list still receives the
   tail's messages.
-- A row refresh that lands while the branch prompt is open rebuilds the list
-  underneath it. If the server's order changed, the branch could be named for
-  one work item and attached to another.
 - Lazily arriving rows scroll the detail pane back to the top. The diff view is
   the exception — it re-renders only the pane whose file just landed.
 - A copy or open failure is reported, but the raw `exec` error is not always

@@ -150,11 +150,24 @@ func TestRootQuitsOnQFromTheMenu(t *testing.T) {
 	}
 }
 
-// openPrompt is a key that leaves the work item view taking typed input: the
-// fuzzy filter, and the branch name editor.
-var openPrompt = map[string]tea.KeyMsg{
-	"the fuzzy filter":  runes("/"),
-	"the branch prompt": runes("b"),
+// openPrompt leaves the work item view's stack taking typed input: the fuzzy
+// filter on the list itself, or the name field of the create branch screen b
+// opens over it.
+var openPrompt = map[string]func(t *testing.T, r *Root) *Root{
+	"the fuzzy filter": func(t *testing.T, r *Root) *Root {
+		updated, _ := r.Update(runes("/"))
+		return updated.(*Root)
+	},
+	"the create branch screen": func(t *testing.T, r *Root) *Root {
+		updated, cmd := r.Update(runes("b"))
+		r = updated.(*Root)
+		if cmd == nil {
+			t.Fatal("b produced no command")
+		}
+		updated, _ = r.Update(cmd())
+		updated, _ = updated.(*Root).Update(tea.KeyMsg{Type: tea.KeyTab})
+		return updated.(*Root)
+	},
 }
 
 func TestRootCtrlCQuitsEvenWithAPromptOpen(t *testing.T) {
@@ -165,10 +178,7 @@ func TestRootCtrlCQuitsEvenWithAPromptOpen(t *testing.T) {
 	// accident: bubbles/list binds ctrl+c as ForceQuit itself. It is covered
 	// here anyway, so the guarantee does not rest on that.)
 	for name, open := range openPrompt {
-		r := newRoot(t, "items")
-
-		updated, _ := r.Update(open)
-		r = updated.(*Root)
+		r := open(t, newRoot(t, "items"))
 		top, _ := r.top()
 		if !typing(top) {
 			t.Fatalf("%s did not open", name)
@@ -189,9 +199,8 @@ func TestRootLeavesEscAndQToAnOpenPrompt(t *testing.T) {
 	// read as navigation while the view is taking typed input.
 	for name, open := range openPrompt {
 		for _, key := range []tea.KeyMsg{{Type: tea.KeyEsc}, runes("q")} {
-			r := newRoot(t, "items")
-			updated, _ := r.Update(open)
-			r = updated.(*Root)
+			r := open(t, newRoot(t, "items"))
+			depth := len(r.stack)
 
 			updated, cmd := r.Update(key)
 			r = updated.(*Root)
@@ -201,12 +210,8 @@ func TestRootLeavesEscAndQToAnOpenPrompt(t *testing.T) {
 					t.Errorf("%v quit the program with %s open", key, name)
 				}
 			}
-			// "open item" over "^t scope": the latter moved into the panel
-			// behind "?" once the work item view's footer was trimmed to fit
-			// 80 columns (see WorkItems.Keys), so it is no longer on r.View()
-			// even while this view is legitimately on top.
-			if !strings.Contains(r.View(), "open item") {
-				t.Errorf("%v popped the view instead of going to %s:\n%s", key, name, r.View())
+			if len(r.stack) != depth {
+				t.Errorf("%v popped the view instead of going to %s", key, name)
 			}
 		}
 	}
@@ -470,11 +475,9 @@ func TestRootGivesTheBodyLessRoomWhenTheHelpPanelOpens(t *testing.T) {
 func TestRootLeavesTheHelpKeyToAnOpenPrompt(t *testing.T) {
 	// "?" is a character someone can type into a branch name or a filter.
 	for name, open := range openPrompt {
-		r := newRoot(t, "items")
-		updated, _ := r.Update(open)
-		r = updated.(*Root)
+		r := open(t, newRoot(t, "items"))
 
-		updated, _ = r.Update(runes("?"))
+		updated, _ := r.Update(runes("?"))
 		r = updated.(*Root)
 
 		if r.help.ShowAll {

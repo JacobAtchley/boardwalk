@@ -32,7 +32,7 @@ func statesCmd(c *azdo.Client, id int, typ string) tea.Cmd {
 // statePicker is the small modal list S opens: the states a work item's type
 // can move to. It is not a pushed view — Root's stack is for whole panes, and
 // this is a handful of names on the status line — so it lives as a field on
-// whichever view opened it, the same way the branch prompt in workitems.go
+// whichever view opened it, the same way the branch prompt in builds.go
 // and the reply prompt in pullrequestdetail.go hold their own modal state. It
 // owns every key while open; esc cancels and enter picks.
 type statePicker struct {

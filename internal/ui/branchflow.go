@@ -25,7 +25,14 @@ type BranchResult struct {
 	Err       error
 }
 
-type branchDoneMsg struct{ BranchResult }
+// branchDoneMsg is a finished flow. Owner is the view that opened the create
+// branch screen: it alone reports the outcome and copies the checkout, so the
+// command is copied once however many views the broadcast reaches. Any view
+// holding the item may still sync what landed on the server.
+type branchDoneMsg struct {
+	BranchResult
+	Owner View
+}
 
 type stateSetMsg struct {
 	ID    int
@@ -45,16 +52,36 @@ type assigneeSetMsg struct {
 	Err         error
 }
 
-// reposFetchedMsg carries the project's repositories, fetched once a branch
-// name has been typed. It names the work item and the branch it was fetched
-// for: Root broadcasts data to every view in the stack, and the answer has to
-// carry the flow it belongs to because nothing else on the receiving side
-// still holds it.
+// reposFetchedMsg carries the project's repositories. ID names the work item
+// the create branch screen fetched them for — Root broadcasts data to every
+// view in the stack, so the answer has to say whose it is. The session view
+// fetches them too, with an ID of zero.
 type reposFetchedMsg struct {
+	ID    int
+	Repos []azdo.Repo
+	Err   error
+}
+
+// branchesFetchedMsg carries a repository's branches, the candidates to
+// create from. RepoID is carried alongside ID because the repository can
+// change while the fetch is out, and a listing for the one just left is
+// stale.
+type branchesFetchedMsg struct {
+	ID     int
+	RepoID string
+	Refs   []azdo.Ref
+	Err    error
+}
+
+// branchStartedMsg tells the view that opened the create branch screen — its
+// Owner — that a flow is running, so its status line can say so while the
+// screen itself is gone.
+type branchStartedMsg struct {
+	Owner  View
 	ID     int
 	Branch string
-	Repos  []azdo.Repo
-	Err    error
+	Repo   string
+	From   string
 }
 
 // pickRepo finds the repository the working directory belongs to among the
@@ -71,23 +98,17 @@ func pickRepo(repos []azdo.Repo, want string) (azdo.Repo, bool) {
 	return azdo.Repo{}, false
 }
 
-// runBranchFlow creates the branch, moves the work item to Active, and links
+// runBranchFlow creates the branch from the commit from points at, moves the work item to Active, and links
 // the branch to it. Each step is recorded before the next runs, so a later
 // failure does not erase what already happened.
-func runBranchFlow(c *azdo.Client, id int, branch string, repo azdo.Repo) BranchResult {
+func runBranchFlow(c *azdo.Client, id int, branch string, repo azdo.Repo, from azdo.Ref) BranchResult {
 	res := BranchResult{Branch: branch, ID: id}
 
-	head, err := c.RefHead(repo.ID, repo.DefaultBranch)
-	if err != nil {
-		res.Err = fmt.Errorf("could not read %s in %s: %w", shortRef(repo.DefaultBranch), repo.Name, err)
-		return res
-	}
-
-	if err := c.CreateBranch(repo.ID, branch, head); err != nil {
+	if err := c.CreateBranch(repo.ID, branch, from.ObjectID); err != nil {
 		res.Err = err
 		return res
 	}
-	res.Steps = append(res.Steps, fmt.Sprintf("created %s in %s", branch, repo.Name))
+	res.Steps = append(res.Steps, fmt.Sprintf("created %s from %s in %s", branch, shortRef(from.Name), repo.Name))
 	res.Created = true
 
 	if err := c.SetState(id, "Active"); err != nil {
@@ -106,27 +127,63 @@ func runBranchFlow(c *azdo.Client, id int, branch string, repo azdo.Repo) Branch
 	return res
 }
 
-// reposCmd lists the project's repositories, off the UI goroutine. It is the
-// first half of the branch flow: the view decides from the answer whether the
-// working directory settles the question or the picker has to ask.
-//
-// The repository used to be resolved inside the flow's own command, which
-// meant a working directory that was not one of the project's repositories
-// could only be reported as a failure — there was nowhere left to ask. The
-// fetch is separated from the flow so that there is.
-func reposCmd(c *azdo.Client, id int, branch string) tea.Cmd {
+// reposCmd lists the project's repositories, off the UI goroutine. id is the
+// work item the answer is for; see reposFetchedMsg.
+func reposCmd(c *azdo.Client, id int) tea.Cmd {
 	return func() tea.Msg {
 		repos, err := c.Repos()
-		return reposFetchedMsg{ID: id, Branch: branch, Repos: repos, Err: err}
+		return reposFetchedMsg{ID: id, Repos: repos, Err: err}
 	}
 }
 
-// branchCmd runs the flow off the UI goroutine against a repository already
-// decided on.
-func branchCmd(c *azdo.Client, id int, branch string, repo azdo.Repo) tea.Cmd {
+// branchesCmd lists a repository's branches, off the UI goroutine.
+func branchesCmd(c *azdo.Client, id int, repoID string) tea.Cmd {
 	return func() tea.Msg {
-		return branchDoneMsg{runBranchFlow(c, id, branch, repo)}
+		refs, err := c.Branches(repoID)
+		return branchesFetchedMsg{ID: id, RepoID: repoID, Refs: refs, Err: err}
 	}
+}
+
+// branchCmd runs the flow off the UI goroutine against a repository and a
+// source branch already decided on.
+func branchCmd(c *azdo.Client, owner View, id int, branch string, repo azdo.Repo, from azdo.Ref) tea.Cmd {
+	return func() tea.Msg {
+		return branchDoneMsg{BranchResult: runBranchFlow(c, id, branch, repo, from), Owner: owner}
+	}
+}
+
+// branchReport is the status line for a finished flow, and copies the
+// checkout command once the branch is on the server. It is the owner's to
+// call; see branchDoneMsg.
+func branchReport(res BranchResult) (status string, failed bool) {
+	// The checkout command is only worth handing over once the ref is really
+	// on the server, but it is worth handing over even when a later step
+	// failed — the branch is there either way, and retyping it by hand is
+	// exactly what this saves.
+	copied := false
+	if res.Created {
+		copied = copyToClipboard(CheckoutCommand(res.Branch)) == nil
+	}
+
+	if res.Err != nil {
+		if len(res.Steps) > 0 {
+			return strings.Join(res.Steps, ", ") + "; then " + res.Err.Error(), true
+		}
+		return res.Err.Error(), true
+	}
+
+	status = strings.Join(res.Steps, " · ")
+	// boardwalk cannot move another shell's working tree, so the checkout
+	// goes on the clipboard: open a shell in the repository and paste.
+	if copied {
+		return status + " · checkout command copied — paste it in the repository", false
+	}
+	return status + " · could not copy the checkout command: " + CheckoutCommand(res.Branch), false
+}
+
+// branchStartedStatus is the status line while a flow runs.
+func branchStartedStatus(msg branchStartedMsg) string {
+	return fmt.Sprintf("creating %s from %s in %s…", msg.Branch, msg.From, msg.Repo)
 }
 
 // CheckoutCommand is what the user pastes into another shell to land on a

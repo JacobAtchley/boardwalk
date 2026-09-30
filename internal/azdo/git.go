@@ -51,9 +51,17 @@ func (c *Client) Repos() ([]Repo, error) {
 	return repos, nil
 }
 
-// RefHead returns the commit a ref points at. ref is the full form,
+// Ref is a Git ref and the commit it points at. Name is the full form,
 // refs/heads/main.
-func (c *Client) RefHead(repoID, ref string) (string, error) {
+type Ref struct {
+	Name     string
+	ObjectID string
+}
+
+// Branches lists the repository's branches, the refs under refs/heads, with
+// the commit each one points at — enough to create a new branch from any of
+// them without a second lookup.
+func (c *Client) Branches(repoID string) ([]Ref, error) {
 	var resp struct {
 		Value []struct {
 			Name     string `json:"name"`
@@ -61,23 +69,18 @@ func (c *Client) RefHead(repoID, ref string) (string, error) {
 		} `json:"value"`
 	}
 
-	endpoint := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/refs?filter=%s&api-version=%s",
+	endpoint := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/refs?filter=heads/&api-version=%s",
 		c.root(), url.PathEscape(c.Org), url.PathEscape(c.Project),
-		url.PathEscape(repoID), url.QueryEscape(strings.TrimPrefix(ref, "refs/")), APIVersion)
+		url.PathEscape(repoID), APIVersion)
 	if err := c.get(endpoint, &resp); err != nil {
-		return "", err
+		return nil, err
 	}
-	// The endpoint's filter is a starts-with match, so filter=heads/main also
-	// returns refs/heads/main-2 and refs/heads/main-hotfix, in unspecified
-	// order. Taking the first entry back would branch off whichever ref the
-	// server happened to list first — the right name is the only way to know
-	// which ref this is.
+
+	refs := make([]Ref, 0, len(resp.Value))
 	for _, v := range resp.Value {
-		if v.Name == ref {
-			return v.ObjectID, nil
-		}
+		refs = append(refs, Ref{Name: v.Name, ObjectID: v.ObjectID})
 	}
-	return "", fmt.Errorf("no ref matching %s", ref)
+	return refs, nil
 }
 
 // MergeRefPullRequestID parses the pull request id out of a merge ref, the

@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -64,20 +63,8 @@ type WorkItems struct {
 	work   work
 	now    func() time.Time
 
-	// branchPrompt is non-nil while the branch name is being edited.
-	branchPrompt *textinput.Model
-
-	// statePicker is non-nil while the full state list is open. It and
-	// branchPrompt are never both set: each one's key (b, S) only reaches the
-	// switch below once neither modal state has already claimed the keyboard.
+	// statePicker is non-nil while the full state list is open.
 	statePicker *statePicker
-
-	// repoPicker is non-nil while the branch flow is asking which repository
-	// to create the branch in. It is the third modal state, and it cannot
-	// overlap either of the others: it opens only once the branch prompt has
-	// closed and a fetch has come back, and while it is up it swallows every
-	// key, so nothing can reach the keys that would open the other two.
-	repoPicker *repoPicker
 
 	// currentRepo names the Azure DevOps repository the working directory
 	// belongs to. It is a field rather than a direct call to
@@ -196,41 +183,23 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 		m.status, m.failed = msg.Text, msg.Err
 		return m, nil
 
-	case reposFetchedMsg:
-		return m, m.resolveRepo(msg)
+	case branchStartedMsg:
+		if msg.Owner == View(m) {
+			m.status, m.failed = branchStartedStatus(msg), false
+		}
+		return m, nil
 
 	case branchDoneMsg:
 		// The state change is real on the server whenever it landed, even if
 		// a later step (the link) then failed — so the row is synced off the
-		// Activated flag, not off whether the whole flow succeeded.
+		// Activated flag, not off whether the whole flow succeeded. It is
+		// synced whoever started the flow: branching from the item open over
+		// this list still leaves the row Active underneath it.
 		if msg.Activated {
 			m.setRowState(msg.ID, "Active")
 		}
-		// The checkout command is only worth handing over once the ref is
-		// really on the server, but it is worth handing over even when a
-		// later step failed — the branch is there either way, and retyping it
-		// by hand is exactly what this saves.
-		copied := false
-		if msg.Created {
-			copied = copyToClipboard(CheckoutCommand(msg.Branch)) == nil
-		}
-
-		if msg.Err != nil {
-			m.failed = true
-			m.status = msg.Err.Error()
-			if len(msg.Steps) > 0 {
-				m.status = strings.Join(msg.Steps, ", ") + "; then " + msg.Err.Error()
-			}
-			return m, nil
-		}
-
-		m.status, m.failed = strings.Join(msg.Steps, " · "), false
-		// boardwalk cannot move another shell's working tree, so the checkout
-		// goes on the clipboard: open a shell in the repository and paste.
-		if copied {
-			m.status += " · checkout command copied — paste it in the repository"
-		} else {
-			m.status += " · could not copy the checkout command: " + CheckoutCommand(msg.Branch)
+		if msg.Owner == View(m) {
+			m.status, m.failed = branchReport(msg.BranchResult)
 		}
 		return m, nil
 
@@ -263,55 +232,7 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// The branch prompt owns every key while it is open, including esc
-		// and the letters that are otherwise actions — typing "o" into it
-		// must add the letter, not open a browser.
-		if m.branchPrompt != nil {
-			switch msg.Type {
-			case tea.KeyEsc:
-				m.branchPrompt = nil
-				m.status, m.failed = "", false
-				return m, nil
-			case tea.KeyEnter:
-				branch := strings.TrimSpace(m.branchPrompt.Value())
-				m.branchPrompt = nil
-				it, ok := m.selected()
-				if !ok || branch == "" {
-					return m, nil
-				}
-				m.status, m.failed = "finding the repository…", false
-				return m, reposCmd(m.client, it.ID, branch)
-			}
-			input, cmd := m.branchPrompt.Update(msg)
-			m.branchPrompt = &input
-			return m, cmd
-		}
-
-		// The repository picker owns every key while it is open, the same
-		// discipline the branch prompt above uses for its own modal state.
-		if m.repoPicker != nil {
-			switch msg.String() {
-			case "esc":
-				m.repoPicker = nil
-				m.status, m.failed = "", false
-			case "enter":
-				repo, ok := m.repoPicker.selected()
-				id, branch := m.repoPicker.itemID, m.repoPicker.branch
-				m.repoPicker = nil
-				if !ok {
-					return m, nil
-				}
-				return m, m.startBranchFlow(id, branch, repo)
-			case "up", "k":
-				m.repoPicker.up()
-			case "down", "j":
-				m.repoPicker.down()
-			}
-			return m, nil
-		}
-
-		// The state picker owns every key while it is open, the same
-		// discipline the branch prompt above uses for its own modal state.
+		// The state picker owns every key while it is open.
 		if m.statePicker != nil {
 			switch msg.String() {
 			case "esc":
@@ -398,51 +319,13 @@ func (m *WorkItems) Update(msg tea.Msg) (View, tea.Cmd) {
 			if !ok {
 				return m, nil
 			}
-			input := textinput.New()
-			input.Prompt = "branch: "
-			input.SetValue(branchName(it.Type, it.ID, it.Title))
-			input.CursorEnd()
-			input.Focus()
-			m.branchPrompt = &input
-			return m, textinput.Blink
+			screen := NewCreateBranch(m.client, it.WorkItem, m.currentRepo, m)
+			return m, func() tea.Msg { return PushMsg{View: screen} }
 		}
 	}
 
 	cmd := m.browser.Update(msg)
 	return m, cmd
-}
-
-// resolveRepo decides what a finished repository fetch means for the branch
-// flow waiting on it: run against the repository the working directory is in,
-// or open the picker because nothing here answers that on its own.
-func (m *WorkItems) resolveRepo(msg reposFetchedMsg) tea.Cmd {
-	if msg.Err != nil {
-		m.status, m.failed = fmt.Sprintf("could not list the project's repositories: %v", msg.Err), true
-		return nil
-	}
-	if len(msg.Repos) == 0 {
-		// Not a case the picker can help with, and worth saying plainly: a
-		// project with no Git repositories is a fact about the project, not a
-		// fact about where boardwalk is running.
-		m.status, m.failed = fmt.Sprintf("%s has no Git repositories to branch in", m.client.Project), true
-		return nil
-	}
-
-	if repo, ok := pickRepo(msg.Repos, m.currentRepo()); ok {
-		return m.startBranchFlow(msg.ID, msg.Branch, repo)
-	}
-
-	m.repoPicker = newRepoPicker(msg.ID, msg.Branch, msg.Repos)
-	m.status, m.failed = "", false
-	return nil
-}
-
-// startBranchFlow kicks the flow off against a repository now settled on,
-// saying so on the status line. Both routes to a repository — the working
-// directory and the picker — end here, so both report it the same way.
-func (m *WorkItems) startBranchFlow(id int, branch string, repo azdo.Repo) tea.Cmd {
-	m.status, m.failed = fmt.Sprintf("creating %s in %s…", branch, repo.Name), false
-	return branchCmd(m.client, id, branch, repo)
 }
 
 // renderDetail is a summary, not the item. It carries what identifies a row
@@ -562,17 +445,11 @@ func (m *WorkItems) Keys() help.KeyMap {
 }
 
 // Status is the transient status line, or a prompt while one is open: the
-// branch prompt and the state picker take priority over the fuzzy filter
-// since only one of the three can be open at a time.
+// state picker takes priority over the fuzzy filter since only one of the two
+// can be open at a time.
 func (m *WorkItems) Status() (string, bool) {
-	if m.branchPrompt != nil {
-		return m.branchPrompt.View(), false
-	}
 	if m.statePicker != nil {
 		return m.statePicker.View(), false
-	}
-	if m.repoPicker != nil {
-		return m.repoPicker.View(), false
 	}
 	if m.browser.Filtering() {
 		return m.browser.FilterView(), false
@@ -583,6 +460,5 @@ func (m *WorkItems) Status() (string, bool) {
 // Prompting reports whether a text prompt or the state picker is open, so
 // Root leaves esc and q to it rather than treating them as navigation.
 func (m *WorkItems) Prompting() bool {
-	return m.branchPrompt != nil || m.statePicker != nil || m.repoPicker != nil ||
-		m.browser.Filtering()
+	return m.statePicker != nil || m.browser.Filtering()
 }

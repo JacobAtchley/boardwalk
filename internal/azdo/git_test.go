@@ -48,89 +48,6 @@ func TestReposParsesTheListing(t *testing.T) {
 	}
 }
 
-func TestRefHeadReturnsTheObjectID(t *testing.T) {
-	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("filter"); got != "heads/main" {
-			t.Errorf("filter = %q, want heads/main", got)
-		}
-		w.Write([]byte(`{"value":[{"name":"refs/heads/main","objectId":"abc123"}]}`))
-	})
-
-	sha, err := c.RefHead("r1", "refs/heads/main")
-	if err != nil {
-		t.Fatalf("RefHead returned %v", err)
-	}
-	if sha != "abc123" {
-		t.Errorf("sha = %q, want abc123", sha)
-	}
-}
-
-func TestRefHeadMatchesTheNameExactly(t *testing.T) {
-	// The refs endpoint's filter is a starts-with match, so filter=heads/main
-	// also returns refs/heads/main-hotfix — in unspecified order. Taking the
-	// first entry would branch a repo off whichever ref happened to come back
-	// first, silently using the wrong commit.
-	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"value":[
-			{"name":"refs/heads/main-hotfix","objectId":"wrong1"},
-			{"name":"refs/heads/main-2","objectId":"wrong2"},
-			{"name":"refs/heads/main","objectId":"right"}
-		]}`))
-	})
-
-	sha, err := c.RefHead("r1", "refs/heads/main")
-	if err != nil {
-		t.Fatalf("RefHead returned %v", err)
-	}
-	if sha != "right" {
-		t.Errorf("sha = %q, want the exactly matching ref's commit", sha)
-	}
-}
-
-func TestRefHeadOnABranchNameWithASlash(t *testing.T) {
-	// Branch names carry the type prefix boardwalk generates, so the common
-	// case has a slash in it and has to survive both the query escaping and
-	// the exact-name comparison.
-	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("filter"); got != "heads/feature/4021-retry" {
-			t.Errorf("filter = %q, want heads/feature/4021-retry", got)
-		}
-		w.Write([]byte(`{"value":[{"name":"refs/heads/feature/4021-retry","objectId":"abc123"}]}`))
-	})
-
-	sha, err := c.RefHead("r1", "refs/heads/feature/4021-retry")
-	if err != nil {
-		t.Fatalf("RefHead returned %v", err)
-	}
-	if sha != "abc123" {
-		t.Errorf("sha = %q, want abc123", sha)
-	}
-}
-
-func TestRefHeadOnAPrefixOnlyMatch(t *testing.T) {
-	// A filter that matches only siblings is a miss, not a hit on the first
-	// one returned.
-	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"value":[{"name":"refs/heads/main-hotfix","objectId":"wrong1"}]}`))
-	})
-
-	if _, err := c.RefHead("r1", "refs/heads/main"); err == nil {
-		t.Fatal("RefHead returned no error for a ref only a sibling matched")
-	}
-}
-
-func TestRefHeadOnAMissingBranch(t *testing.T) {
-	// A filter that matches nothing comes back 200 with an empty list, so the
-	// error has to be synthesised rather than read off the status code.
-	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"value":[]}`))
-	})
-
-	if _, err := c.RefHead("r1", "refs/heads/nope"); err == nil {
-		t.Fatal("RefHead on a missing branch returned no error")
-	}
-}
-
 func TestCreateBranchPostsAZeroOldObjectID(t *testing.T) {
 	var body string
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -193,5 +110,36 @@ func TestCreateBranchSurfacesAPerRefFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "branch already exists") {
 		t.Errorf("error = %q, want the custom message", err)
+	}
+}
+
+func TestBranchesListsOnlyBranchHeads(t *testing.T) {
+	// The source picker offers branches to create from, so the listing asks
+	// for refs/heads only — tags and pull request refs are not candidates.
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/_apis/git/repositories/r1/refs") {
+			t.Errorf("path = %q, want the repository's refs endpoint", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("filter"); got != "heads/" {
+			t.Errorf("filter = %q, want heads/", got)
+		}
+		w.Write([]byte(`{"value":[
+			{"name":"refs/heads/main","objectId":"m1"},
+			{"name":"refs/heads/hotfix/1.2","objectId":"h1"}
+		]}`))
+	})
+
+	refs, err := c.Branches("r1")
+	if err != nil {
+		t.Fatalf("Branches returned %v", err)
+	}
+	want := []Ref{{Name: "refs/heads/main", ObjectID: "m1"}, {Name: "refs/heads/hotfix/1.2", ObjectID: "h1"}}
+	if len(refs) != len(want) {
+		t.Fatalf("got %d refs, want %d", len(refs), len(want))
+	}
+	for i := range want {
+		if refs[i] != want[i] {
+			t.Errorf("refs[%d] = %+v, want %+v", i, refs[i], want[i])
+		}
 	}
 }
