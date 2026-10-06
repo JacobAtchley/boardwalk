@@ -209,8 +209,9 @@ herdr pane run "$pane" "claude '/review-pr $BOARDWALK_ID'"
 
 A key is one key, spelled as for `paletteKey`. boardwalk refuses at startup a
 key it needs itself, one lists or panes move with (`j`, `k`, `l`, `h`, `b`,
-`u`, `f`, `d`, `g`, `G`, `/`, space, `^d`, `^u`, the arrows, `home`, `end`, page keys), one every screen uses (`r`, `y`, `s`,
-`o` and their `^` forms), or the palette key. A key a single screen already
+`u`, `f`, `d`, `g`, `G`, `/`, space, `^d`, `^u`, the arrows, `home`, `end`,
+page keys), one every screen uses (`r`, `y`, `^y`, `s`, `^s`, `o`, `^o`), or
+the palette key. `^r` is free. A key a single screen already
 uses keeps doing what it did there, and the command is left out of that
 screen's help.
 
