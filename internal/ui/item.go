@@ -570,3 +570,6 @@ func (r itemRow) Render(width int) string { return "" }
 func (r itemRow) CopyID() string          { return fmt.Sprint(r.ID) }
 func (r itemRow) Label() string           { return fmt.Sprintf("#%d %s", r.ID, r.Title) }
 func (r itemRow) URL() string             { return r.url }
+
+// Subject is the work item this pane shows, for a custom command.
+func (m *Item) Subject() (subject, bool) { return workItemSubject(m.client, m.item), true }

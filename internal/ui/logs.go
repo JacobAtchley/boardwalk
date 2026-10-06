@@ -621,3 +621,6 @@ func (m *Logs) Keys() help.KeyMap {
 
 // Status is the transient status line.
 func (m *Logs) Status() (string, bool) { return m.work.View() + m.status, m.failed }
+
+// Subject is the run whose log this is, for a custom command.
+func (m *Logs) Subject() (subject, bool) { return buildSubject(m.client, m.build), true }

@@ -814,3 +814,6 @@ func (m *PullRequestDiff) Status() (string, bool) {
 // Prompting reports whether a text prompt is open, so Root leaves esc and q to
 // the prompt rather than treating them as navigation.
 func (m *PullRequestDiff) Prompting() bool { return m.browser.Filtering() }
+
+// Subject is the pull request whose change this is, for a custom command.
+func (m *PullRequestDiff) Subject() (subject, bool) { return pullRequestSubject(m.client, m.pr), true }

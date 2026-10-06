@@ -908,3 +908,8 @@ func (r prDetailRow) Render(width int) string { return "" }
 func (r prDetailRow) CopyID() string          { return fmt.Sprint(r.ID) }
 func (r prDetailRow) Label() string           { return fmt.Sprintf("!%d %s", r.ID, r.Title) }
 func (r prDetailRow) URL() string             { return r.url }
+
+// Subject is the pull request this pane shows, for a custom command.
+func (m *PullRequestDetail) Subject() (subject, bool) {
+	return pullRequestSubject(m.client, m.pr), true
+}
