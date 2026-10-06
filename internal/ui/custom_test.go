@@ -83,6 +83,23 @@ func TestStartShellStopsWaitingOnALongCommand(t *testing.T) {
 	}
 }
 
+func TestStartShellDoesNotWaitOnABackgroundChild(t *testing.T) {
+	needSh(t)
+	shortWait(t, 5*time.Second)
+
+	// The script exits at once but leaves a child holding stderr. With a pipe
+	// for stderr, Wait would block until the child let go.
+	start := time.Now()
+	got := startShell("bg", "sleep 2 >&2 &", nil)
+
+	if got.Err || got.Text != `ran "bg"` {
+		t.Errorf("status = %+v", got)
+	}
+	if time.Since(start) > time.Second {
+		t.Errorf("waited %v on a backgrounded child", time.Since(start))
+	}
+}
+
 func TestStartShellNeverEvaluatesValues(t *testing.T) {
 	needSh(t)
 	dir := t.TempDir()
@@ -97,16 +114,25 @@ func TestStartShellNeverEvaluatesValues(t *testing.T) {
 	}
 }
 
-func TestTailBufferKeepsTheEnd(t *testing.T) {
-	var b tailBuffer
-	for range 100 {
-		b.Write([]byte(strings.Repeat("x", 100) + "\n"))
+func TestStderrTailKeepsTheEnd(t *testing.T) {
+	tests := []struct {
+		name, content, want string
+	}{
+		{"empty", "", ""},
+		{"blank only", "\n  \n", ""},
+		{"last non-blank line", "first\nlast\n\n", "last"},
+		{"a long run is cut to the cap", strings.Repeat(strings.Repeat("x", 100)+"\n", 100) + "last\n\n", "last"},
+		{"a single line longer than the cap", strings.Repeat("y", 3*tailLimit), strings.Repeat("y", tailLimit)},
 	}
-	b.Write([]byte("last\n\n"))
-	if len(b.b) > tailLimit {
-		t.Errorf("buffer grew to %d bytes", len(b.b))
-	}
-	if b.lastLine() != "last" {
-		t.Errorf("lastLine = %q", b.lastLine())
+	for _, tc := range tests {
+		f, err := os.CreateTemp(t.TempDir(), "tail")
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.WriteString(tc.content)
+		if got := stderrTail(f); got != tc.want {
+			t.Errorf("%s: stderrTail = %q, want %q", tc.name, got, tc.want)
+		}
+		f.Close()
 	}
 }
