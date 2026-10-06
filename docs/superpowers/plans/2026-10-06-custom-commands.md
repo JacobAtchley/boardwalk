@@ -4,7 +4,7 @@
 
 **Goal:** Let the config bind a single key, on a kind of screen, to a user shell command that runs detached with the screen's subject in `BOARDWALK_*` environment variables.
 
-**Architecture:** `config` gains a `Command` list and validates what it can alone. `ui` gains a runner (`custom.go`, `sh -c`, detached, reports within a 2 s window), a `subject` that eight views expose through an optional `Subject()` method, and Root-level dispatch: Root matches the key before the view does, skips it while the view is prompting or binds the key itself, runs the command, and shows the outcome as a note on the status line. Custom commands join the `?` panel, and so the palette, through a `help.KeyMap` wrapper like the existing `paletteKeys`.
+**Architecture:** `config` gains a `Command` list and validates what it can alone. `ui` gains a runner (`custom.go`, `sh -c`, detached, reports within a 2 s window), a `subject` that eight views expose through an optional `Subject()` method, and Root-level dispatch: Root matches the key before the view does, skips it while the view is prompting or binds the key itself, runs the command, and delivers the outcome as a `StatusMsg` to the view it ran on — wherever that view now sits in the stack. Three views that mishandle `StatusMsg` today (Logs ignores it; PullRequestDetail and Item drop its error flag) are fixed first. Custom commands join the `?` panel, and so the palette, through a `help.KeyMap` wrapper like the existing `paletteKeys`.
 
 **Tech Stack:** Go 1.27, bubbletea, bubbles (`key`, `help`, `list`), `os/exec`.
 
@@ -24,9 +24,9 @@
 
 ## Review Focus
 
-1. **A key the list moves with but does not list in `Keys()`** (`l`, `h`, `b`, `u`, `f`, `d`, `pgup`…) — expected: refused at startup, not silently stealing paging on list views. Pinned in Task 4 (`TestCheckCommandsRefusesListMovementKeys`).
-2. **The custom key pressed while a vote or draft toggle is armed** — expected: the arm sees the key (cancels), the command does not run. Pinned in Task 4 (`TestRootSkipsACommandWhileAVoteIsArmed`).
-3. **Navigating away before the result arrives** — expected: the result is not shown as the status of a different screen. Pinned in Task 4 (`TestRootDropsAResultForAViewNoLongerOnTop`).
+1. **A key the list moves with but does not list in `Keys()`** (`l`, `h`, `b`, `u`, `f`, `d`, `pgup`…) — expected: refused at startup, not silently stealing paging on list views. Pinned in Task 5 (`TestCheckCommandsRefusesListMovementKeys`).
+2. **The custom key pressed while a vote or draft toggle is armed** — expected: the arm sees the key (cancels), the command does not run. Pinned in Task 5 (`TestRootSkipsACommandWhileAVoteIsArmed`).
+3. **Navigating away before the result arrives** — expected: the result is not shown as the status of a different screen, and is waiting on the screen it ran on when the user comes back. Pinned in Task 5 (`TestRootDeliversAResultToTheViewItRanOn`).
 4. **A command that writes a lot to stderr, over many lines** — expected: only the last line is shown, memory stays bounded. Pinned in Task 2 (`TestStartShellReportsOnlyTheLastStderrLine`).
 5. **A title holding shell syntax** (`$(touch pwned)`) — expected: inert. Pinned in Task 2 (`TestStartShellNeverEvaluatesValues`).
 
@@ -41,8 +41,8 @@
 | `internal/ui/custom_unix.go` (create) | `shellCommand` for unix: `sh -c`, `Setpgid` |
 | `internal/ui/custom_windows.go` (create) | `shellCommand` for Windows: `cmd /C`, new process group |
 | `internal/ui/subject.go` (create) | `subject`, `subjecter`, the three subject builders |
-| `internal/ui/rootcommands.go` (create) | `WithCommands`, `CheckCommands`, dispatch, note, help wrapper |
-| 8 view files (modify) | one `Subject()` method each |
+| `internal/ui/rootcommands.go` (create) | `WithCommands`, `CheckCommands`, dispatch, help wrapper |
+| 8 view files (modify) | one `Subject()` method each; Logs, PullRequestDetail and Item also learn to show a `StatusMsg` error |
 | `internal/ui/root.go`, `rootpalette.go` (modify) | call into rootcommands.go |
 | `main.go` (modify) | wire validation and `WithCommands` |
 | `README.md` (modify) | document `commands` |
@@ -600,7 +600,7 @@ func TestAnEmptyListHasNoSubjectButKeepsItsKind(t *testing.T) {
 }
 ```
 
-Before running, check two names against the code and adjust the test (not the code) if they differ: the zero `threadFilter` constant passed to `NewPullRequestDiff` (`grep -n "threadFilter = iota" -A3 internal/ui/threadfilter.go`), and whether `NewPullRequests`/`NewBuilds` need a `tea.WindowSizeMsg` before `Selected()` returns a row (if so, send `tea.WindowSizeMsg{Width: 140, Height: 30}` first). `FileView` is covered in Task 4 through Root, because its constructor needs file text; give it the method here all the same.
+Before running, check two names against the code and adjust the test (not the code) if they differ: the zero `threadFilter` constant passed to `NewPullRequestDiff` (`grep -n "threadFilter = iota" -A3 internal/ui/threadfilter.go`), and whether `NewPullRequests`/`NewBuilds` need a `tea.WindowSizeMsg` before `Selected()` returns a row (if so, send `tea.WindowSizeMsg{Width: 140, Height: 30}` first). `FileView` is covered in Task 5 through Root, because its constructor needs file text; give it the method here all the same.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -753,15 +753,143 @@ git commit -m "feat: name what each screen shows for custom commands"
 
 ---
 
-### Task 4: Root — dispatch, status note, help and palette
+### Task 4: Every subject view shows a StatusMsg, error colour included
+
+A custom command reports through `StatusMsg`, delivered to the view it ran on. Three of the eight views mishandle it today: `Logs` has no `case StatusMsg` at all, and `PullRequestDetail` and `Item` keep the text but drop `Err`. Their `failed` field cannot simply take `Err`: in both it also means "the discussion did not load", and the body reads it to replace the discussion with `could not load the discussion — press r to try again`.
+
+The fix records which status text was an error, rather than adding a sticky flag: any later status assignment changes `m.status`, and the red goes with it without every existing assignment having to clear a flag.
+
+**Files:**
+- Modify: `internal/ui/logs.go` (`Update`), `internal/ui/pullrequestdetail.go` (struct, `Update`, `Status`), `internal/ui/item.go` (struct, `Update`, `Status`)
+- Test: `internal/ui/statusmsg_test.go`
+
+**Interfaces:**
+- Produces: on `Logs`, `PullRequestDetail` and `Item`, `Update(StatusMsg{Text, Err})` makes `Status()` return `(… + Text, Err)` until the view next sets its status; the body is unaffected.
+
+- [ ] **Step 1: Write the failing tests** — `internal/ui/statusmsg_test.go`:
+
+```go
+package ui
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestSubjectViewsShowAStatusMsgWithItsColour(t *testing.T) {
+	c, items := fixture()
+	for _, tc := range []struct {
+		name string
+		view View
+	}{
+		{"logs", NewLogs(c, buildStub(), nil)},
+		{"pr detail", NewPullRequestDetail(c, subjectPR(), nil)},
+		{"item", NewItem(c, items[0], nil)},
+	} {
+		v, _ := tc.view.Update(StatusMsg{Text: "boom", Err: true})
+		if text, isErr := v.Status(); !strings.HasSuffix(text, "boom") || !isErr {
+			t.Errorf("%s: after an error, Status() = %q, %v", tc.name, text, isErr)
+		}
+		v, _ = v.Update(StatusMsg{Text: "fine"})
+		if text, isErr := v.Status(); !strings.HasSuffix(text, "fine") || isErr {
+			t.Errorf("%s: after a success, Status() = %q, %v", tc.name, text, isErr)
+		}
+	}
+}
+
+func TestAStatusErrorDoesNotClaimTheDiscussionFailed(t *testing.T) {
+	// failed means the discussion did not load, and the body says so. A
+	// command failing is not that.
+	c, items := fixture()
+	for _, tc := range []struct {
+		name string
+		view View
+	}{
+		{"pr detail", NewPullRequestDetail(c, subjectPR(), nil)},
+		{"item", NewItem(c, items[0], nil)},
+	} {
+		v, _ := tc.view.Update(StatusMsg{Text: "boom", Err: true})
+		if body := v.Body(120, 40); strings.Contains(body, "could not load the discussion") {
+			t.Errorf("%s: a status error replaced the discussion:\n%s", tc.name, body)
+		}
+	}
+}
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `go test ./internal/ui/ -run 'TestSubjectViewsShowAStatusMsg|TestAStatusErrorDoesNot'`
+Expected: FAIL — logs shows no "boom"; pr detail and item report `isErr` false.
+
+- [ ] **Step 3: Implement**
+
+`internal/ui/logs.go`, in `Update`'s switch, beside the other cases:
+
+```go
+	case StatusMsg:
+		m.status, m.failed = msg.Text, msg.Err
+		return m, nil
+```
+
+(`Logs.failed` only means "the last status was an error" — it keeps a failed poll's message from being cleared — so it can take `Err` directly.)
+
+`internal/ui/pullrequestdetail.go` — add to the struct, after `status string`:
+
+```go
+	// errStatus is the status text, when a StatusMsg said it was an error.
+	// It is not a flag: failed already means the discussion did not load, and
+	// a flag would stay set after the next status replaced this one. Comparing
+	// text means the red goes when the message does.
+	errStatus string
+```
+
+replace the `StatusMsg` case:
+
+```go
+	case StatusMsg:
+		m.status, m.errStatus = msg.Text, ""
+		if msg.Err {
+			m.errStatus = msg.Text
+		}
+		return m, nil
+```
+
+and the end of `Status`:
+
+```go
+	return m.work.View() + m.status, m.failed || (m.errStatus != "" && m.errStatus == m.status)
+```
+
+`internal/ui/item.go` — the same field after `status string`, with the same comment; the same `StatusMsg` case; and `Status`'s last line:
+
+```go
+	return m.work.View() + m.status, m.failed || m.stateErr || m.assignErr || m.commentErr ||
+		(m.errStatus != "" && m.errStatus == m.status)
+```
+
+- [ ] **Step 4: Run to verify pass**
+
+Run: `go test ./internal/ui/`
+Expected: PASS, whole package.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/ui/logs.go internal/ui/pullrequestdetail.go internal/ui/item.go internal/ui/statusmsg_test.go
+git commit -m "fix: show a status message, and its error colour, on every detail pane"
+```
+
+---
+
+### Task 5: Root — dispatch, help and palette
 
 **Files:**
 - Create: `internal/ui/rootcommands.go`
-- Modify: `internal/ui/root.go` (fields, `Update`, `key`, `View`), `internal/ui/rootpalette.go` (`paletteEntries`, `paletteFrame`, `paletteBinding`)
+- Modify: `internal/ui/root.go` (fields, `Update`, `key`, `View`), `internal/ui/rootpalette.go` (`paletteEntries`, `paletteBinding`)
 - Test: `internal/ui/rootcommands_test.go`
 
 **Interfaces:**
-- Consumes: `config.Command` (Task 1); `runShell` (Task 2); `subject`, `subjecter` (Task 3)
+- Consumes: `config.Command` (Task 1); `runShell` (Task 2); `subject`, `subjecter` (Task 3); every subject view honouring `StatusMsg.Err` (Task 4)
 - Produces:
   - `func WithCommands(cmds []config.Command) RootOption`
   - `func CheckCommands(cmds []config.Command, paletteKey string) error`
@@ -776,7 +904,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JacobAtchley/boardwalk/internal/azdo"
 	"github.com/JacobAtchley/boardwalk/internal/config"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -834,7 +961,7 @@ func run(t *testing.T, r *Root, cmd tea.Cmd) *Root {
 
 func statusOf(r *Root) (string, bool) {
 	top, _ := r.top()
-	return r.status(top)
+	return top.Status()
 }
 
 func TestRootRunsACommandWithTheSubject(t *testing.T) {
@@ -933,7 +1060,10 @@ func TestRootSkipsACommandWhileAVoteIsArmed(t *testing.T) {
 	}
 }
 
-func TestRootDropsAResultForAViewNoLongerOnTop(t *testing.T) {
+func TestRootDeliversAResultToTheViewItRanOn(t *testing.T) {
+	// The user can move on in the two seconds a command is watched. Its
+	// result belongs to the pane it ran on: not shown as news about the pane
+	// now on top, and there to read on coming back.
 	stubRunner(t)
 	c, items := fixture()
 	r := rootOn(t, NewPullRequestDetail(c, subjectPR(), nil), reviewCommand())
@@ -944,6 +1074,24 @@ func TestRootDropsAResultForAViewNoLongerOnTop(t *testing.T) {
 
 	if text, _ := statusOf(r); strings.Contains(text, "review") {
 		t.Errorf("the work item pane shows the pull request command's result: %q", text)
+	}
+	r, _ = send(t, r, PopMsg{})
+	if text, _ := statusOf(r); text != `ran "review"` {
+		t.Errorf("back on the pull request, status = %q", text)
+	}
+}
+
+func TestRootDropsAResultForAViewThatIsGone(t *testing.T) {
+	stubRunner(t)
+	c, _ := fixture()
+	r := rootOn(t, NewPullRequestDetail(c, subjectPR(), nil), reviewCommand())
+
+	r, cmd := send(t, r, ctrlR)
+	r, _ = send(t, r, PopMsg{})
+	r = run(t, r, cmd) // must not panic, and has nowhere to go
+
+	if len(r.stack) != 0 {
+		t.Errorf("stack = %v", r.stack)
 	}
 }
 
@@ -1118,15 +1266,25 @@ func (r *Root) commandKey(top View, msg tea.KeyMsg) (tea.Cmd, bool) {
 
 	subj, ok := top.(subjecter).Subject()
 	if !ok {
-		r.setNote(top, StatusMsg{Text: "nothing selected"})
+		r.tell(top, StatusMsg{Text: "nothing selected"})
 		return nil, true
 	}
 
 	env := r.commandEnv(subj)
-	r.setNote(top, StatusMsg{Text: fmt.Sprintf("running %q…", c.Name)})
+	r.tell(top, StatusMsg{Text: fmt.Sprintf("running %q…", c.Name)})
 	return func() tea.Msg {
 		return commandDoneMsg{view: top, status: runShell(c.Name, c.Run, env)}
 	}, true
+}
+
+// tell delivers a status to v wherever it sits in the stack, and does
+// nothing if it is no longer there. It is called synchronously for "running…"
+// rather than returned as a command: a command finishing faster than that
+// message was delivered would have its result overwritten by it.
+func (r *Root) tell(v View, s StatusMsg) {
+	if i := slices.Index(r.stack, v); i >= 0 {
+		r.stack[i], _ = v.Update(s)
+	}
 }
 
 // commandEnv is the BOARDWALK_ variables for a subject, in a fixed order so
@@ -1144,29 +1302,11 @@ func (r *Root) commandEnv(s subject) []string {
 }
 
 // commandDoneMsg is how a custom command turned out, addressed to the view
-// it ran on.
+// it ran on. A plain StatusMsg would go to whatever is on top when it lands,
+// which after two seconds may be somewhere else entirely.
 type commandDoneMsg struct {
 	view   View
 	status StatusMsg
-}
-
-// note is a status line Root shows over a view's own: what a custom command
-// is doing. It belongs to the view it ran on, so a result that lands after
-// the user has moved on is not shown as the status of somewhere else. The
-// next key press clears it, as a view's own transient status would be.
-type note struct {
-	view   View
-	status StatusMsg
-}
-
-func (r *Root) setNote(v View, s StatusMsg) { r.note = note{view: v, status: s} }
-
-// status is what the status line shows for the view on top.
-func (r *Root) status(top View) (string, bool) {
-	if r.note.view == top && r.note.status.Text != "" {
-		return r.note.status.Text, r.note.status.Err
-	}
-	return top.Status()
 }
 
 // keysFor is the view's bindings with the custom commands active on it
@@ -1213,17 +1353,15 @@ func paletteBinding(k string) key.Binding {
 }
 ```
 
-In `paletteEntries`, replace `top.Keys().FullHelp()` with `r.keysFor(top).FullHelp()`. In `paletteFrame`, replace `status, isErr := top.Status()` with `status, isErr := r.status(top)`.
+In `paletteEntries`, replace `top.Keys().FullHelp()` with `r.keysFor(top).FullHelp()`.
 
 In `internal/ui/root.go`:
 
 - add to `Root`, after `history`:
 
 ```go
-	// commands are the user's custom commands, and note is what the last one
-	// is doing — see rootcommands.go.
+	// commands are the user's custom commands — see rootcommands.go.
 	commands []config.Command
-	note     note
 ```
 
   and the `config` import.
@@ -1232,18 +1370,8 @@ In `internal/ui/root.go`:
 
 ```go
 	case commandDoneMsg:
-		if top, ok := r.top(); ok && top == msg.view {
-			r.setNote(top, msg.status)
-		}
+		r.tell(msg.view, msg.status)
 		return r, nil
-```
-
-  and make the `tea.KeyMsg` case clear the note first:
-
-```go
-	case tea.KeyMsg:
-		r.note = note{}
-		if cmd, handled := r.key(msg); handled {
 ```
 
 - in `key`, after the palette-key block and before `switch msg.String() {` (the esc/q one):
@@ -1256,7 +1384,7 @@ In `internal/ui/root.go`:
 
   It sits after the `typing(top)` guard, so a prompt, a filter or an armed vote or draft toggle sees the key first.
 
-- in `View`, replace `withPalette(top.Keys(), r.paletteKey)` with `withPalette(r.keysFor(top), r.paletteKey)` and `status, isErr := top.Status()` with `status, isErr := r.status(top)`.
+- in `View`, replace `withPalette(top.Keys(), r.paletteKey)` with `withPalette(r.keysFor(top), r.paletteKey)`.
 
 - [ ] **Step 4: Run to verify pass**
 
@@ -1272,13 +1400,13 @@ git commit -m "feat: run a custom command from its key, the help panel or the pa
 
 ---
 
-### Task 5: Wire it up and document it
+### Task 6: Wire it up and document it
 
 **Files:**
 - Modify: `main.go` (`rootOptions`), `main_test.go`, `README.md`
 
 **Interfaces:**
-- Consumes: `Config.ValidateCommands` (Task 1); `ui.CheckCommands`, `ui.WithCommands` (Task 4)
+- Consumes: `Config.ValidateCommands` (Task 1); `ui.CheckCommands`, `ui.WithCommands` (Task 5)
 
 - [ ] **Step 1: Write the failing test** — append to `main_test.go`:
 
