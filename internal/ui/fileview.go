@@ -405,3 +405,6 @@ func (m *FileView) Status() (string, bool) {
 // Prompting reports whether the comment prompt is open, so Root leaves esc
 // to it rather than treating it as navigation.
 func (m *FileView) Prompting() bool { return m.commentPrompt != nil }
+
+// Subject is the pull request this file belongs to, for a custom command.
+func (m *FileView) Subject() (subject, bool) { return pullRequestSubject(m.client, m.pr), true }

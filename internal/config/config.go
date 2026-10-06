@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -46,6 +47,36 @@ type Config struct {
 	// PaletteKey opens the command palette, spelled the way bubbletea names
 	// keys: "ctrl+p", "ctrl+k", ":". Empty means the default, ctrl+p.
 	PaletteKey string `json:"paletteKey,omitempty"`
+
+	// Commands bind a key on one kind of screen to a shell command of the
+	// user's own. See Command.
+	Commands []Command `json:"commands,omitempty"`
+}
+
+// The kinds of screen a command can be bound on, named for what the screen
+// shows rather than which view shows it: a pull request is a pull request
+// whether it is a row in the list or the pane it opens.
+const (
+	KindPullRequest = "pullRequest"
+	KindWorkItem    = "workItem"
+	KindBuild       = "build"
+)
+
+// CommandKinds is every kind a command's On may name.
+var CommandKinds = []string{KindPullRequest, KindWorkItem, KindBuild}
+
+// Command is one user-defined action: on a screen of kind On, the key Key
+// runs Run with sh -c. Name is what the help panel, the palette and the
+// status line call it.
+//
+// Run is the only action there is. Another kind of action would be a field
+// beside it rather than a type tag, so a config written today keeps meaning
+// what it says.
+type Command struct {
+	On   string `json:"on"`
+	Key  string `json:"key"`
+	Name string `json:"name"`
+	Run  string `json:"run"`
 }
 
 // ErrMissing is returned when there is no config file at all, so a caller can
@@ -116,6 +147,33 @@ func (c Config) Validate(path string) error {
 		return fmt.Errorf("%s does not set org", path)
 	case c.Project == "":
 		return fmt.Errorf("%s does not set project", path)
+	}
+	return nil
+}
+
+// ValidateCommands reports the first command that cannot work, naming the
+// file and the command's place in the list. Whether Key names a real key, and
+// one boardwalk does not need itself, is ui.CheckCommands' job: only the UI
+// knows its keys.
+func (c Config) ValidateCommands(path string) error {
+	seen := make(map[[2]string]int, len(c.Commands))
+	for i, cmd := range c.Commands {
+		where := fmt.Sprintf("%s: commands[%d]", path, i)
+		switch {
+		case !slices.Contains(CommandKinds, cmd.On):
+			return fmt.Errorf("%s has on %q — use one of %s", where, cmd.On, strings.Join(CommandKinds, ", "))
+		case cmd.Key == "":
+			return fmt.Errorf("%s sets no key", where)
+		case strings.TrimSpace(cmd.Name) == "":
+			return fmt.Errorf("%s sets no name", where)
+		case strings.TrimSpace(cmd.Run) == "":
+			return fmt.Errorf("%s sets no run", where)
+		}
+		k := [2]string{cmd.On, cmd.Key}
+		if j, dup := seen[k]; dup {
+			return fmt.Errorf("%s binds %q on %s, as commands[%d] already does", where, cmd.Key, cmd.On, j)
+		}
+		seen[k] = i
 	}
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/JacobAtchley/boardwalk/internal/config"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -692,4 +693,14 @@ func (m *Builds) Status() (string, bool) {
 // the prompt rather than treating them as navigation.
 func (m *Builds) Prompting() bool {
 	return m.branchPrompt != nil || m.armedBuild != nil || m.browser.Filtering()
+}
+
+// Subject is the selected run, for a custom command.
+func (m *Builds) Subject() (subject, bool) {
+	if row, ok := m.browser.Selected(); ok {
+		if r, ok := row.(buildRow); ok {
+			return buildSubject(m.client, r.Build), true
+		}
+	}
+	return subject{kind: config.KindBuild}, false
 }

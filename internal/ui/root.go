@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/JacobAtchley/boardwalk/internal/config"
 	"github.com/JacobAtchley/boardwalk/internal/history"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -53,6 +54,9 @@ type Root struct {
 	palette    *Palette
 	paletteKey key.Binding
 	history    History
+
+	// commands are the user's custom commands — see rootcommands.go.
+	commands []config.Command
 
 	// help renders a view's bindings: one line by default, every group when
 	// the user presses "?".
@@ -145,6 +149,10 @@ func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case goToMsg:
 		return r, r.goTo(msg.name)
+
+	case commandDoneMsg:
+		r.tell(msg.view, msg.status)
+		return r, nil
 
 	case tea.KeyMsg:
 		if cmd, handled := r.key(msg); handled {
@@ -259,6 +267,10 @@ func (r *Root) key(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return nil, true
 	}
 
+	if cmd, ok := r.commandKey(top, msg); ok {
+		return cmd, true
+	}
+
 	switch msg.String() {
 	case "esc":
 		r.stack = r.stack[:len(r.stack)-1]
@@ -308,7 +320,7 @@ func (r *Root) View() string {
 	// from what it actually renders rather than from a constant. The title and
 	// the status line are one row each.
 	r.help.Width = r.width
-	helpView := r.help.View(withPalette(top.Keys(), r.paletteKey))
+	helpView := r.help.View(withPalette(r.keysFor(top), r.paletteKey))
 	body := top.Body(r.width, max(1, r.height-lipgloss.Height(helpView)-2))
 
 	status, isErr := top.Status()

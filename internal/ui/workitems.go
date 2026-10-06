@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/JacobAtchley/boardwalk/internal/config"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -461,4 +462,14 @@ func (m *WorkItems) Status() (string, bool) {
 // Root leaves esc and q to it rather than treating them as navigation.
 func (m *WorkItems) Prompting() bool {
 	return m.statePicker != nil || m.browser.Filtering()
+}
+
+// Subject is the selected work item, for a custom command.
+func (m *WorkItems) Subject() (subject, bool) {
+	if row, ok := m.browser.Selected(); ok {
+		if r, ok := row.(workItemRow); ok {
+			return workItemSubject(m.client, r.WorkItem), true
+		}
+	}
+	return subject{kind: config.KindWorkItem}, false
 }

@@ -117,3 +117,25 @@ func TestRootOptionsRejectsAPaletteKeyItCannotUse(t *testing.T) {
 		t.Errorf("an unset key gave %d options, want only the history", len(opts))
 	}
 }
+
+func TestRootOptionsChecksCommands(t *testing.T) {
+	t.Setenv("BOARDWALK_CONFIG", t.TempDir()+"/boardwalk.json")
+	good := config.Command{On: config.KindPullRequest, Key: "ctrl+r", Name: "review", Run: "review.sh"}
+
+	opts, err := rootOptions(config.Config{Commands: []config.Command{good}})
+	if err != nil || len(opts) != 2 {
+		t.Errorf("rootOptions = %d options, %v; want the commands and the history", len(opts), err)
+	}
+
+	bad := good
+	bad.On = "pr"
+	if _, err := rootOptions(config.Config{Commands: []config.Command{bad}}); err == nil {
+		t.Error("an unknown kind was accepted")
+	}
+
+	bad = good
+	bad.Key = "q"
+	if _, err := rootOptions(config.Config{Commands: []config.Command{bad}}); err == nil {
+		t.Error("a reserved key was accepted")
+	}
+}

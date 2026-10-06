@@ -128,8 +128,13 @@ type PullRequestDetail struct {
 	renderedAt int
 
 	status string
-	work   work
-	now    func() time.Time
+	// errStatus is the status text, when a StatusMsg said it was an error.
+	// It is not a flag: failed already means the discussion did not load, and
+	// a flag would stay set after the next status replaced this one. Comparing
+	// text means the red goes when the message does.
+	errStatus string
+	work      work
+	now       func() time.Time
 
 	// replyPrompt is non-nil while a reply to a thread is being typed.
 	replyPrompt *textinput.Model
@@ -538,7 +543,10 @@ func (m *PullRequestDetail) Update(msg tea.Msg) (View, tea.Cmd) {
 		return m, func() tea.Msg { return PushMsg{View: builds} }
 
 	case StatusMsg:
-		m.status = msg.Text
+		m.status, m.errStatus = msg.Text, ""
+		if msg.Err {
+			m.errStatus = msg.Text
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -886,7 +894,7 @@ func (m *PullRequestDetail) Status() (string, bool) {
 	if m.replyPrompt != nil {
 		return m.replyPrompt.View(), false
 	}
-	return m.work.View() + m.status, m.failed
+	return m.work.View() + m.status, m.failed || (m.errStatus != "" && m.errStatus == m.status)
 }
 
 // Prompting reports whether the reply prompt or one of the two arms is open,
@@ -908,3 +916,8 @@ func (r prDetailRow) Render(width int) string { return "" }
 func (r prDetailRow) CopyID() string          { return fmt.Sprint(r.ID) }
 func (r prDetailRow) Label() string           { return fmt.Sprintf("!%d %s", r.ID, r.Title) }
 func (r prDetailRow) URL() string             { return r.url }
+
+// Subject is the pull request this pane shows, for a custom command.
+func (m *PullRequestDetail) Subject() (subject, bool) {
+	return pullRequestSubject(m.client, m.pr), true
+}

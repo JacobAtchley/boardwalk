@@ -63,11 +63,15 @@ func CheckPaletteKey(k string) error {
 // paletteBinding is the binding for the palette key, with its help spelled
 // the way the rest of the footer spells control keys: ^p, not ctrl+p.
 func paletteBinding(k string) key.Binding {
-	shown := k
+	return key.NewBinding(key.WithKeys(k), key.WithHelp(shownKey(k), "commands"))
+}
+
+// shownKey spells a key the way the footer does: ^p, not ctrl+p.
+func shownKey(k string) string {
 	if rest, ok := strings.CutPrefix(k, "ctrl+"); ok && len(rest) == 1 {
-		shown = "^" + rest
+		return "^" + rest
 	}
-	return key.NewBinding(key.WithKeys(k), key.WithHelp(shown, "commands"))
+	return k
 }
 
 // goToMsg asks Root to show one of the main views, from however deep the
@@ -126,29 +130,41 @@ func (r *Root) paletteEntries() []paletteEntry {
 		return entries
 	}
 
+	// A custom command gets an id namespace of its own: built-ins come first
+	// under "act:<description>", so a command named "refresh" would otherwise
+	// be dropped as a duplicate of the built-in and share its history.
 	seen := make(map[string]struct{}, 32)
-	for _, group := range top.Keys().FullHelp() {
-		for _, b := range group {
-			h := b.Help()
-			if !b.Enabled() || h.Desc == "" || len(b.Keys()) == 0 {
-				continue
+	add := func(groups [][]key.Binding, prefix string) {
+		for _, group := range groups {
+			for _, b := range group {
+				h := b.Help()
+				if !b.Enabled() || h.Desc == "" || len(b.Keys()) == 0 {
+					continue
+				}
+				// "?" would open a panel listing these same entries.
+				first := b.Keys()[0]
+				if slices.Contains(keyHelp.Keys(), first) {
+					continue
+				}
+				id := prefix + h.Desc
+				if _, dup := seen[id]; dup {
+					continue
+				}
+				msg, ok := keyMsgFor(first)
+				if !ok {
+					continue
+				}
+				seen[id] = struct{}{}
+				entries = append(entries, paletteEntry{id: id, title: h.Desc, hint: h.Key, msg: msg})
 			}
-			// "?" would open a panel listing these same entries.
-			first := b.Keys()[0]
-			if slices.Contains(keyHelp.Keys(), first) {
-				continue
-			}
-			id := "act:" + h.Desc
-			if _, dup := seen[id]; dup {
-				continue
-			}
-			msg, ok := keyMsgFor(first)
-			if !ok {
-				continue
-			}
-			seen[id] = struct{}{}
-			entries = append(entries, paletteEntry{id: id, title: h.Desc, hint: h.Key, msg: msg})
 		}
+	}
+	km := r.keysFor(top)
+	if ck, ok := km.(commandKeys); ok {
+		add(ck.KeyMap.FullHelp(), "act:")
+		add([][]key.Binding{ck.commands}, "act:cmd:")
+	} else {
+		add(km.FullHelp(), "act:")
 	}
 	return entries
 }

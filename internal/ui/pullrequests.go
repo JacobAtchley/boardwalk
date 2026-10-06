@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/JacobAtchley/boardwalk/internal/azdo"
+	"github.com/JacobAtchley/boardwalk/internal/config"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -508,3 +509,13 @@ func (m *PullRequests) Status() (string, bool) {
 // Root leaves esc and q to this view rather than treating them as navigation —
 // esc has to cancel the arm, not pop the pane out from under it.
 func (m *PullRequests) Prompting() bool { return m.browser.Filtering() || m.armedDraft != nil }
+
+// Subject is the selected pull request, for a custom command.
+func (m *PullRequests) Subject() (subject, bool) {
+	if row, ok := m.browser.Selected(); ok {
+		if r, ok := row.(prRow); ok {
+			return pullRequestSubject(m.client, r.PullRequest), true
+		}
+	}
+	return subject{kind: config.KindPullRequest}, false
+}

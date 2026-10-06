@@ -70,6 +70,7 @@ Everything boardwalk needs to know lives in one file at
 | `project` | the team project within it |
 | `reviewGroups` | optional — extra teams and security groups to treat as yours, named as Azure DevOps displays them |
 | `paletteKey` | optional — the key that opens the [command palette](#command-palette), spelled `ctrl+k`, `:`, `f1`; defaults to `ctrl+p` |
+| `commands` | optional — your own [custom commands](#custom-commands), each a key on a kind of screen |
 
 Azure DevOps scopes a group's display name to wherever it lives —
 `[TEAM FOUNDATION]\platform-devs` for a collection group, `[MyProject]\Team
@@ -157,6 +158,62 @@ recognise, or one it needs itself (`esc`, `q`, `?`, `enter`, `^c`, and the
 menu's `↑`/`↓`/`j`/`k`), at startup. A key a view also binds is taken by the
 palette on that view, so pick one that is free. Like every other key, it is left to a
 prompt while one is open.
+
+### Custom commands
+
+Bind a key on a kind of screen to a shell command of your own. boardwalk runs
+it with `sh -c` (`cmd /C` on Windows), detached — it keeps the screen and reports on the status line
+whether the command ran, failed (with the last line it wrote to stderr), or is
+still going after two seconds and has been left to run.
+
+```json
+"commands": [
+  {
+    "on": "pullRequest",
+    "key": "ctrl+r",
+    "name": "review with claude",
+    "run": "~/bin/pr-review.sh"
+  }
+]
+```
+
+`on` is the kind of screen: `pullRequest` (the list, the pull request, its
+diff and files), `workItem` (the list and the item) or `build` (the list and
+the logs). The command appears in the `?` panel and the palette there.
+
+What the screen shows reaches the command as environment variables, never
+pasted into the command, so a title full of shell syntax stays a title:
+
+| variable | on | |
+|---|---|---|
+| `BOARDWALK_KIND` | all | `pullRequest`, `workItem` or `build` |
+| `BOARDWALK_ORG`, `BOARDWALK_PROJECT` | all | from the config |
+| `BOARDWALK_ID`, `BOARDWALK_TITLE`, `BOARDWALK_URL` | all | the selected thing |
+| `BOARDWALK_REPO`, `BOARDWALK_SOURCE_BRANCH`, `BOARDWALK_TARGET_BRANCH`, `BOARDWALK_AUTHOR`, `BOARDWALK_IS_DRAFT` | pullRequest | branches without `refs/heads/` |
+| `BOARDWALK_TYPE`, `BOARDWALK_STATE` | workItem | |
+| `BOARDWALK_NUMBER`, `BOARDWALK_PIPELINE`, `BOARDWALK_BRANCH`, `BOARDWALK_RESULT` | build | |
+
+The command also inherits boardwalk's own environment, so a terminal
+multiplexer's variables pass straight through. For example, a script that
+opens a [herdr](https://herdr.dev) tab beside boardwalk and starts a Claude
+Code review there (it needs `jq`; adjust the last line to your own review
+skill):
+
+```sh
+#!/bin/sh
+# ~/bin/pr-review.sh
+pane=$(herdr tab create --label "review !$BOARDWALK_ID" --cwd "$PWD" --focus |
+  jq -r .result.root_pane.pane_id)
+herdr pane run "$pane" "claude '/review-pr $BOARDWALK_ID'"
+```
+
+A key is one key, spelled as for `paletteKey`. boardwalk refuses at startup a
+key it needs itself, one lists or panes move with (`j`, `k`, `l`, `h`, `b`,
+`u`, `f`, `d`, `g`, `G`, `/`, space, `^d`, `^u`, the arrows, `home`, `end`,
+page keys), one every screen uses (`r`, `y`, `^y`, `s`, `^s`, `o`, `^o`), or
+the palette key. `^r` is free. A key a single screen already
+uses keeps doing what it did there, and the command is left out of that
+screen's help.
 
 ### Every list view
 
