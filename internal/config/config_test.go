@@ -175,3 +175,51 @@ func TestExampleIsItselfValid(t *testing.T) {
 		t.Errorf("the example config does not validate: %v", err)
 	}
 }
+
+func TestLoadReadsCommands(t *testing.T) {
+	t.Setenv(EnvPath, writeConfig(t, `{
+		"org": "acme", "project": "Platform",
+		"commands": [{"on": "pullRequest", "key": "ctrl+r", "name": "review", "run": "echo hi"}]
+	}`))
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned %v", err)
+	}
+	want := Command{On: "pullRequest", Key: "ctrl+r", Name: "review", Run: "echo hi"}
+	if len(c.Commands) != 1 || c.Commands[0] != want {
+		t.Errorf("commands = %+v, want [%+v]", c.Commands, want)
+	}
+}
+
+func TestValidateCommands(t *testing.T) {
+	ok := Command{On: KindPullRequest, Key: "ctrl+r", Name: "review", Run: "echo hi"}
+	with := func(edit func(*Command)) Command { c := ok; edit(&c); return c }
+
+	for _, tc := range []struct {
+		name string
+		cmds []Command
+		want string // substring of the error; empty means valid
+	}{
+		{"none", nil, ""},
+		{"one good", []Command{ok}, ""},
+		{"same key on two kinds", []Command{ok, with(func(c *Command) { c.On = KindBuild })}, ""},
+		{"unknown kind", []Command{with(func(c *Command) { c.On = "pr" })}, `on "pr"`},
+		{"no key", []Command{with(func(c *Command) { c.Key = "" })}, "sets no key"},
+		{"no name", []Command{with(func(c *Command) { c.Name = " " })}, "sets no name"},
+		{"no run", []Command{with(func(c *Command) { c.Run = "" })}, "sets no run"},
+		{"duplicate", []Command{ok, ok}, "as commands[0] already does"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Config{Commands: tc.cmds}.ValidateCommands("/cfg.json")
+			switch {
+			case tc.want == "" && err != nil:
+				t.Errorf("got %v, want valid", err)
+			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+				t.Errorf("got %v, want an error containing %q", err, tc.want)
+			case tc.want != "" && !strings.Contains(err.Error(), "/cfg.json"):
+				t.Errorf("%v does not name the file", err)
+			}
+		})
+	}
+}
