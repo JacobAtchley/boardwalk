@@ -71,6 +71,9 @@ Loading fails, naming the config file, when a command:
 - has a `key` that `keyMsgFor` cannot parse;
 - has a `key` in `reservedKeys` (`esc`, `q`, `?`, `ctrl+c`, `enter`, `up`,
   `down`, `j`, `k`) or equal to the palette key;
+- has a `key` a list moves its cursor with (bubbles/list's default key map:
+  `l`, `h`, `b`, `u`, `f`, `g`, `G`, `/`, page and arrow keys) — no view lists
+  these in its help, so the collision check below could not see them;
 - shares its `on` and `key` with another command;
 - has an empty `name` or `run`.
 
@@ -125,11 +128,16 @@ Views gain one optional interface:
 ```go
 // subjecter is a view showing one thing a custom command can act on.
 type subjecter interface {
-	Subject() (kind string, env map[string]string, ok bool)
+	Subject() (s subject, ok bool)
+}
+
+type subject struct {
+	kind string
+	env  map[string]string
 }
 ```
 
-`env` holds the kind-specific variables without their `BOARDWALK_` prefix;
+`subject.env` holds the kind-specific variables without their `BOARDWALK_` prefix;
 Root adds the prefix and the variables common to every kind. `ok` is false
 when there is nothing to act on — an empty list, or a detail view whose
 subject has not loaded.
@@ -176,8 +184,11 @@ A new `internal/ui/custom.go`. The runner sits behind a package variable, as
   Nothing the command prints may reach the terminal bubbletea is drawing.
 - `SysProcAttr{Setpgid: true}`, so a `ctrl+c` that quits boardwalk is not also
   delivered to the command, and the command outlives boardwalk.
-- The run is a `tea.Cmd` that waits up to two seconds, then returns a
-  `StatusMsg`:
+- `running "<name>"…` is delivered to the view at once. The run is a
+  `tea.Cmd` that waits up to two seconds, then produces a `StatusMsg`, which
+  Root delivers to the view the command ran on wherever it now sits in the
+  stack (dropped if it has been closed), so a result never appears as news
+  about a different screen:
   - exited 0: `ran "<name>"`;
   - exited non-zero: an error, `"<name>" failed: <last stderr line>`, or the
     exit code when stderr is empty;
@@ -187,10 +198,11 @@ A new `internal/ui/custom.go`. The runner sits behind a package variable, as
 
 ## Wiring
 
-- `config.Config` gains `Commands []Command`. `Validate` covers the rules
-  that need nothing from the UI: a known `on`, a non-empty `name` and `run`,
-  no duplicate `on` + `key`. The key rules — parseable, not reserved, not the
-  palette key — need `keyMsgFor` and `reservedKeys`, so they live in
+- `config.Config` gains `Commands []Command`. `ValidateCommands(path)` —
+  separate from `Validate`, whose errors print the org/project example —
+  covers the rules that need nothing from the UI: a known `on`, a non-empty `name` and `run`,
+  no duplicate `on` + `key`. The key rules — parseable, not reserved, not a list
+  movement key, not the palette key — need `keyMsgFor` and `reservedKeys`, so they live in
   `ui.CheckCommands(cmds, paletteKey)`, which `main` calls beside
   `CheckPaletteKey`. `config` keeps not importing `ui`.
 - `ui.WithCommands([]config.Command)` hands them to Root, alongside
@@ -223,3 +235,11 @@ Test-first, following the existing table-driven style.
     file);
   - exit 0, non-zero with stderr, non-zero without, and still-running each
     give the status described above.
+
+## Status line fixes
+
+`Logs` ignores `StatusMsg`, and `PullRequestDetail` and `Item` drop its
+`Err`. All three are fixed to show the text in the error colour when `Err` is
+set. In the two detail views `failed` cannot take it — it also means the
+discussion did not load, and the body reads it — so they remember which
+status text was an error and colour it only while that text is still shown.
