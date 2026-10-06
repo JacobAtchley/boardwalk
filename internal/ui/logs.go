@@ -212,6 +212,10 @@ func (m *Logs) Update(msg tea.Msg) (View, tea.Cmd) {
 	case tailTickMsg:
 		return m, m.startFetch()
 
+	case StatusMsg:
+		m.status, m.failed = msg.Text, msg.Err
+		return m, nil
+
 	case tea.KeyMsg:
 		// Matched against the bindings in keys.go rather than against raw
 		// strings: this view's footer is built from those bindings, and a

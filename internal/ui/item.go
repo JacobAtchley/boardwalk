@@ -77,8 +77,13 @@ type Item struct {
 	renderedAt int
 
 	status string
-	work   work
-	now    func() time.Time
+	// errStatus is the status text, when a StatusMsg said it was an error.
+	// It is not a flag: failed already means the discussion did not load, and
+	// a flag would stay set after the next status replaced this one. Comparing
+	// text means the red goes when the message does.
+	errStatus string
+	work      work
+	now       func() time.Time
 
 	// statePicker is non-nil while the state picker is open. See the type's
 	// own doc in statepicker.go; it holds the same modal discipline the
@@ -311,7 +316,10 @@ func (m *Item) Update(msg tea.Msg) (View, tea.Cmd) {
 		return m, nil
 
 	case StatusMsg:
-		m.status = msg.Text
+		m.status, m.errStatus = msg.Text, ""
+		if msg.Err {
+			m.errStatus = msg.Text
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -547,7 +555,8 @@ func (m *Item) Status() (string, bool) {
 	if m.statePicker != nil {
 		return m.statePicker.View(), false
 	}
-	return m.work.View() + m.status, m.failed || m.stateErr || m.assignErr || m.commentErr
+	return m.work.View() + m.status, m.failed || m.stateErr || m.assignErr || m.commentErr ||
+		(m.errStatus != "" && m.errStatus == m.status)
 }
 
 // Prompting reports whether the state picker or the comment prompt is open,
