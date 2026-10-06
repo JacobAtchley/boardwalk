@@ -63,11 +63,15 @@ func CheckPaletteKey(k string) error {
 // paletteBinding is the binding for the palette key, with its help spelled
 // the way the rest of the footer spells control keys: ^p, not ctrl+p.
 func paletteBinding(k string) key.Binding {
-	shown := k
+	return key.NewBinding(key.WithKeys(k), key.WithHelp(shownKey(k), "commands"))
+}
+
+// shownKey spells a key the way the footer does: ^p, not ctrl+p.
+func shownKey(k string) string {
 	if rest, ok := strings.CutPrefix(k, "ctrl+"); ok && len(rest) == 1 {
-		shown = "^" + rest
+		return "^" + rest
 	}
-	return key.NewBinding(key.WithKeys(k), key.WithHelp(shown, "commands"))
+	return k
 }
 
 // goToMsg asks Root to show one of the main views, from however deep the
@@ -127,7 +131,7 @@ func (r *Root) paletteEntries() []paletteEntry {
 	}
 
 	seen := make(map[string]struct{}, 32)
-	for _, group := range top.Keys().FullHelp() {
+	for _, group := range r.keysFor(top).FullHelp() {
 		for _, b := range group {
 			h := b.Help()
 			if !b.Enabled() || h.Desc == "" || len(b.Keys()) == 0 {
