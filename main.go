@@ -142,7 +142,8 @@ func loadConfig() (config.Config, error) {
 
 // rootOptions turns the palette settings into options for the TUI: the key
 // that opens it, checked here so a typo is reported at startup rather than
-// as a key that silently does nothing, and where its history is kept.
+// as a key that silently does nothing, the custom commands, checked and bound
+// the same way, and where the palette's history is kept.
 func rootOptions(cfg config.Config) ([]ui.RootOption, error) {
 	var opts []ui.RootOption
 	if cfg.PaletteKey != "" {
@@ -151,6 +152,16 @@ func rootOptions(cfg config.Config) ([]ui.RootOption, error) {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 		opts = append(opts, ui.WithPaletteKey(cfg.PaletteKey))
+	}
+	if len(cfg.Commands) > 0 {
+		path, _ := config.Path()
+		if err := cfg.ValidateCommands(path); err != nil {
+			return nil, err
+		}
+		if err := ui.CheckCommands(cfg.Commands, cfg.PaletteKey); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		opts = append(opts, ui.WithCommands(cfg.Commands))
 	}
 	// No history path means no home directory to put it in; the palette
 	// then remembers for this session only, which is the default.
