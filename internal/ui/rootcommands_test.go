@@ -226,6 +226,37 @@ func TestRootListsCommandsInHelpAndRunsThemFromThePalette(t *testing.T) {
 	}
 }
 
+func TestRootPaletteKeepsACommandNamedLikeABuiltIn(t *testing.T) {
+	ran := stubRunner(t)
+	c, _ := fixture()
+	cmd := config.Command{On: config.KindPullRequest, Key: "ctrl+r", Name: "refresh", Run: "refresh.sh"}
+	r := rootOn(t, NewPullRequestDetail(c, subjectPR(), nil), cmd)
+
+	// Built-ins are listed first under "act:<description>", so a command
+	// sharing the description would be deduplicated away and share history.
+	var builtin, custom *paletteEntry
+	entries := r.paletteEntries()
+	for i := range entries {
+		switch entries[i].id {
+		case "act:refresh":
+			builtin = &entries[i]
+		case "act:cmd:refresh":
+			custom = &entries[i]
+		}
+	}
+	if builtin == nil {
+		t.Fatal("the built-in refresh left the palette")
+	}
+	if custom == nil {
+		t.Fatalf("the custom command is not in the palette: %+v", entries)
+	}
+	r, runCmd := send(t, r, custom.msg)
+	r = run(t, r, runCmd)
+	if len(*ran) != 1 || (*ran)[0].script != "refresh.sh" {
+		t.Errorf("running the palette entry ran %+v", *ran)
+	}
+}
+
 func TestCheckCommands(t *testing.T) {
 	cmd := func(k string) []config.Command {
 		return []config.Command{{On: config.KindBuild, Key: k, Name: "n", Run: "r"}}

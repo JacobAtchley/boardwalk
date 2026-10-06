@@ -130,29 +130,41 @@ func (r *Root) paletteEntries() []paletteEntry {
 		return entries
 	}
 
+	// A custom command gets an id namespace of its own: built-ins come first
+	// under "act:<description>", so a command named "refresh" would otherwise
+	// be dropped as a duplicate of the built-in and share its history.
 	seen := make(map[string]struct{}, 32)
-	for _, group := range r.keysFor(top).FullHelp() {
-		for _, b := range group {
-			h := b.Help()
-			if !b.Enabled() || h.Desc == "" || len(b.Keys()) == 0 {
-				continue
+	add := func(groups [][]key.Binding, prefix string) {
+		for _, group := range groups {
+			for _, b := range group {
+				h := b.Help()
+				if !b.Enabled() || h.Desc == "" || len(b.Keys()) == 0 {
+					continue
+				}
+				// "?" would open a panel listing these same entries.
+				first := b.Keys()[0]
+				if slices.Contains(keyHelp.Keys(), first) {
+					continue
+				}
+				id := prefix + h.Desc
+				if _, dup := seen[id]; dup {
+					continue
+				}
+				msg, ok := keyMsgFor(first)
+				if !ok {
+					continue
+				}
+				seen[id] = struct{}{}
+				entries = append(entries, paletteEntry{id: id, title: h.Desc, hint: h.Key, msg: msg})
 			}
-			// "?" would open a panel listing these same entries.
-			first := b.Keys()[0]
-			if slices.Contains(keyHelp.Keys(), first) {
-				continue
-			}
-			id := "act:" + h.Desc
-			if _, dup := seen[id]; dup {
-				continue
-			}
-			msg, ok := keyMsgFor(first)
-			if !ok {
-				continue
-			}
-			seen[id] = struct{}{}
-			entries = append(entries, paletteEntry{id: id, title: h.Desc, hint: h.Key, msg: msg})
 		}
+	}
+	km := r.keysFor(top)
+	if ck, ok := km.(commandKeys); ok {
+		add(ck.KeyMap.FullHelp(), "act:")
+		add([][]key.Binding{ck.commands}, "act:cmd:")
+	} else {
+		add(km.FullHelp(), "act:")
 	}
 	return entries
 }
