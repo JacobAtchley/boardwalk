@@ -162,7 +162,7 @@ prompt while one is open.
 ### Custom commands
 
 Bind a key on a kind of screen to a shell command of your own. boardwalk runs
-it with `sh -c`, detached — it keeps the screen and reports on the status line
+it with `sh -c` (`cmd /C` on Windows), detached — it keeps the screen and reports on the status line
 whether the command ran, failed (with the last line it wrote to stderr), or is
 still going after two seconds and has been left to run.
 
@@ -196,7 +196,8 @@ pasted into the command, so a title full of shell syntax stays a title:
 The command also inherits boardwalk's own environment, so a terminal
 multiplexer's variables pass straight through. For example, a script that
 opens a [herdr](https://herdr.dev) tab beside boardwalk and starts a Claude
-Code review there (adjust the last line to your own review skill):
+Code review there (it needs `jq`; adjust the last line to your own review
+skill):
 
 ```sh
 #!/bin/sh
@@ -208,9 +209,10 @@ herdr pane run "$pane" "claude '/review-pr $BOARDWALK_ID'"
 
 A key is one key, spelled as for `paletteKey`. boardwalk refuses at startup a
 key it needs itself, one lists or panes move with (`j`, `k`, `l`, `h`, `b`,
-`u`, `f`, `d`, `g`, `G`, `/`, space, `^d`, `^u`, the arrows, page keys), or the
-palette key. A key a screen already uses keeps doing what it did there, and the
-command is left out of that screen's help.
+`u`, `f`, `d`, `g`, `G`, `/`, space, `^d`, `^u`, the arrows, `home`, `end`, page keys), one every screen uses (`r`, `y`, `s`,
+`o` and their `^` forms), or the palette key. A key a single screen already
+uses keeps doing what it did there, and the command is left out of that
+screen's help.
 
 ### Every list view
 
