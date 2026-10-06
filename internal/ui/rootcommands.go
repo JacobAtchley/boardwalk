@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -18,13 +19,19 @@ func WithCommands(cmds []config.Command) RootOption {
 	return func(r *Root) { r.commands = cmds }
 }
 
-// listMovementKeys are the keys a list moves its cursor with. No view lists
-// them in its help — they belong to bubbles/list — so the help-based
-// collision check cannot see them, and Root sees a key before the view does.
-func listMovementKeys() []string {
-	km := list.DefaultKeyMap()
+// movementKeys are the keys a view moves or scrolls with: a list's cursor
+// keys, and the default bubbles viewport keys the detail panes forward
+// unhandled keys to. No view lists them in its help — they belong to
+// bubbles — so the help-based collision check cannot see them, and Root sees
+// a key before the view does.
+func movementKeys() []string {
+	lm := list.DefaultKeyMap()
+	vm := viewport.DefaultKeyMap()
 	var keys []string
-	for _, b := range []key.Binding{km.CursorUp, km.CursorDown, km.PrevPage, km.NextPage, km.GoToStart, km.GoToEnd, km.Filter} {
+	for _, b := range []key.Binding{
+		lm.CursorUp, lm.CursorDown, lm.PrevPage, lm.NextPage, lm.GoToStart, lm.GoToEnd, lm.Filter,
+		vm.PageDown, vm.PageUp, vm.HalfPageDown, vm.HalfPageUp, vm.Up, vm.Down, vm.Left, vm.Right,
+	} {
 		keys = append(keys, b.Keys()...)
 	}
 	return keys
@@ -36,7 +43,7 @@ func CheckCommands(cmds []config.Command, paletteKey string) error {
 	if paletteKey == "" {
 		paletteKey = DefaultPaletteKey
 	}
-	moves := listMovementKeys()
+	moves := movementKeys()
 	for i, c := range cmds {
 		switch {
 		case !validKey(c.Key):
@@ -44,7 +51,7 @@ func CheckCommands(cmds []config.Command, paletteKey string) error {
 		case slices.Contains(reservedKeys, c.Key):
 			return fmt.Errorf("commands[%d] key %q is one boardwalk needs for itself", i, c.Key)
 		case slices.Contains(moves, c.Key):
-			return fmt.Errorf("commands[%d] key %q moves the cursor in lists", i, c.Key)
+			return fmt.Errorf("commands[%d] key %q moves the cursor or scrolls", i, c.Key)
 		case c.Key == paletteKey:
 			return fmt.Errorf("commands[%d] key %q opens the command palette", i, c.Key)
 		}

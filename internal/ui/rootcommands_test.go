@@ -207,8 +207,14 @@ func TestRootListsCommandsInHelpAndRunsThemFromThePalette(t *testing.T) {
 	c, _ := fixture()
 	r := rootOn(t, NewPullRequestDetail(c, subjectPR(), nil), reviewCommand())
 
+	// The binding renders as "^r review". The word alone proves nothing: the
+	// pane has a "reviewers" label of its own.
+	const listed = "^r review"
+	if strings.Contains(r.View(), listed) {
+		t.Errorf("the closed footer already lists the command:\n%s", r.View())
+	}
 	r, _ = send(t, r, runes("?"))
-	if !strings.Contains(r.View(), "review") {
+	if !strings.Contains(r.View(), listed) {
 		t.Errorf("the help panel does not list the command:\n%s", r.View())
 	}
 	r, _ = send(t, r, runes("?"))
@@ -249,9 +255,9 @@ func TestCheckCommandsRefusesListMovementKeys(t *testing.T) {
 	// A list moves its cursor on keys no view lists in its help: l pages
 	// right, b pages back. Root sees a key before the view does, so a command
 	// on one would quietly take paging away from every list.
-	for _, k := range []string{"l", "h", "b", "u", "f", "pgup", "home", "G"} {
+	for _, k := range []string{"l", "h", "b", "u", "f", "pgup", "home", "G", " ", "ctrl+d", "ctrl+u"} {
 		err := CheckCommands([]config.Command{{On: config.KindBuild, Key: k, Name: "n", Run: "r"}}, "")
-		if err == nil || !strings.Contains(err.Error(), "moves the cursor") {
+		if err == nil || !strings.Contains(err.Error(), "moves the cursor or scrolls") {
 			t.Errorf("%s: got %v", k, err)
 		}
 	}
