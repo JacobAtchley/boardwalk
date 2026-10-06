@@ -263,6 +263,17 @@ func TestCheckCommandsRefusesListMovementKeys(t *testing.T) {
 	}
 }
 
+func TestCheckCommandsRefusesKeysEveryScreenUses(t *testing.T) {
+	// Built in on every subject screen, these always win over a command, so
+	// a command on one would pass startup and never run.
+	for _, k := range []string{"r", "y", "ctrl+y", "s", "ctrl+s", "o", "ctrl+o"} {
+		err := CheckCommands([]config.Command{{On: config.KindBuild, Key: k, Name: "n", Run: "r"}}, "")
+		if err == nil || !strings.Contains(err.Error(), "already bound on every screen") {
+			t.Errorf("%s: got %v", k, err)
+		}
+	}
+}
+
 func TestRootRunsACommandOnAFileView(t *testing.T) {
 	// The file pane is reached by drilling in from a diff, so Root is the only
 	// way to see its Subject at work.

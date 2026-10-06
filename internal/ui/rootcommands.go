@@ -37,13 +37,26 @@ func movementKeys() []string {
 	return keys
 }
 
+// everyScreenKeys are the keys built in on every subject screen: the shared
+// actions and refresh. A command on one would lose to the built-in each time
+// (activeCommands drops it), so it passes startup and can never run.
+func everyScreenKeys() []string {
+	var keys []string
+	for _, b := range append(sharedBindings(), keyRefresh) {
+		keys = append(keys, b.Keys()...)
+	}
+	return keys
+}
+
 // CheckCommands reports a command whose key cannot work: one that is not a
-// key, one Root needs, one a list moves with, or the palette's.
+// key, one Root needs, one a list moves with, one every screen already uses,
+// or the palette's.
 func CheckCommands(cmds []config.Command, paletteKey string) error {
 	if paletteKey == "" {
 		paletteKey = DefaultPaletteKey
 	}
 	moves := movementKeys()
+	everywhere := everyScreenKeys()
 	for i, c := range cmds {
 		switch {
 		case !validKey(c.Key):
@@ -52,6 +65,8 @@ func CheckCommands(cmds []config.Command, paletteKey string) error {
 			return fmt.Errorf("commands[%d] key %q is one boardwalk needs for itself", i, c.Key)
 		case slices.Contains(moves, c.Key):
 			return fmt.Errorf("commands[%d] key %q moves the cursor or scrolls", i, c.Key)
+		case slices.Contains(everywhere, c.Key):
+			return fmt.Errorf("commands[%d] key %q is already bound on every screen", i, c.Key)
 		case c.Key == paletteKey:
 			return fmt.Errorf("commands[%d] key %q opens the command palette", i, c.Key)
 		}
